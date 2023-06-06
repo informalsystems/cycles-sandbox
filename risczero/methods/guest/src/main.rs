@@ -8,16 +8,18 @@ use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 use core::ops::Neg;
 
+use ecies::decrypt;
 use mtcs_core::SimpleSetOff;
 use risc0_zkvm::guest::env;
 
 risc0_zkvm::guest::entry!(main);
 pub fn main() {
-    let set_offs: Vec<SimpleSetOff> = env::read();
-    check(&set_offs);
+    let sk: Vec<u8> = env::read();
+    let setoffs: Vec<Vec<u8>> = env::read();
+    check(&sk, &setoffs);
 }
 
-fn check(setoffs: &[SimpleSetOff]) {
+fn check(sk: &[u8], setoffs: &[Vec<u8>]) {
     fn assert_eq_pos_neg(b: &BTreeMap<u32, i64>) {
         let pos_b: i64 = b.values().cloned().filter(|amount| amount > &0).sum();
 
@@ -30,6 +32,14 @@ fn check(setoffs: &[SimpleSetOff]) {
 
         assert_eq!(pos_b, neg_b);
     }
+
+    let setoffs: Vec<SimpleSetOff> = setoffs
+        .into_iter()
+        .map(|so| {
+            let so = decrypt(sk, so).unwrap();
+            serde_json::from_slice(&so).unwrap()
+        })
+        .collect();
 
     // ba - net balance positions of the obligation network
     let ba = setoffs.iter().fold(BTreeMap::<_, _>::new(), |mut acc, so| {

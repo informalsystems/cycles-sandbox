@@ -8,3 +8,5 @@ methods = { path = "../methods" }
 risc0-zkvm = { version = "0.15.2" }
 mtcs-core = { path = "../mtcs-core" }
 serde = { version = "1.0", default-features = false }
+ecies = { version = "0.2.3", default-features = false, features = ["pure"] }
+serde_json = { version = "1.0.96", default-features = false }
