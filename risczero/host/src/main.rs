@@ -36,14 +36,22 @@ fn main() {
         )
         .build();
 
+    let now = std::time::Instant::now();
+
     // Next, we make an executor, loading the (renamed) ELF binary.
+    println!("Starting executor...");
     let mut exec = Executor::from_elf(env, MTCS_CHECK_ELF).unwrap();
 
     // Run the executor to produce a session.
+    println!("Running executor...");
     let session = exec.run().unwrap();
 
     // Prove the session to produce a receipt.
+    println!("Proving session...");
     let receipt = session.prove().unwrap();
+
+    let proof_time = now.elapsed();
+    println!("Proof generation time: {:?}", proof_time);
 
     // TODO: Implement code for transmitting or serializing the receipt for
     // other parties to verify here
@@ -51,4 +59,5 @@ fn main() {
     // Optional: Verify receipt to confirm that recipients will also be able to
     // verify your receipt
     receipt.verify(MTCS_CHECK_ID).unwrap();
+    println!("Verification time: {:?}", now.elapsed() - proof_time);
 }
