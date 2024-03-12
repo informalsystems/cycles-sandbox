@@ -2,7 +2,7 @@ use ecies::encrypt;
 use ecies::utils::generate_keypair;
 use methods::{MTCS_CHECK_ELF, MTCS_CHECK_ID};
 use mtcs_core::SimpleSetOff;
-use risc0_zkvm::{serde, Executor, ExecutorEnv};
+use risc0_zkvm::{default_prover, serde, ExecutorEnv};
 
 fn main() {
     let (sk, pk) = generate_keypair();
@@ -43,23 +43,31 @@ fn main() {
 
     // First, we construct an executor environment
     let env = ExecutorEnv::builder()
-        .add_input(&serde::to_vec(&sk.to_vec()).unwrap())
-        .add_input(&serde::to_vec(&setoffs).unwrap())
-        .build();
+        .write(&serde::to_vec(&sk.to_vec()).unwrap())
+        .unwrap()
+        .write(&serde::to_vec(&setoffs).unwrap())
+        .unwrap()
+        .build()
+        .unwrap();
 
     let now = std::time::Instant::now();
 
-    // Next, we make an executor, loading the (renamed) ELF binary.
-    println!("Starting executor...");
-    let mut exec = Executor::from_elf(env, MTCS_CHECK_ELF).unwrap();
+    // // Next, we make an executor, loading the (renamed) ELF binary.
+    // println!("Starting executor...");
+    // let mut exec = Executor::from_elf(env, MTCS_CHECK_ELF).unwrap();
+    //
+    // // Run the executor to produce a session.
+    // println!("Running executor...");
+    // let session = exec.run().unwrap();
+    //
+    // // Prove the session to produce a receipt.
+    // println!("Proving session...");
+    // let receipt = session.prove().unwrap();
 
-    // Run the executor to produce a session.
-    println!("Running executor...");
-    let session = exec.run().unwrap();
+    let prover = default_prover();
 
-    // Prove the session to produce a receipt.
-    println!("Proving session...");
-    let receipt = session.prove().unwrap();
+    // Produce a receipt by proving the specified ELF binary.
+    let receipt = prover.prove(env, MTCS_CHECK_ELF).unwrap();
 
     let proof_time = now.elapsed();
     println!("Proof generation time: {:?}", proof_time);
