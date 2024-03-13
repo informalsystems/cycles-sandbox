@@ -6,6 +6,7 @@ extern crate alloc;
 
 use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
+use alloc::string::String;
 use core::ops::Neg;
 
 use ecies::decrypt;
@@ -14,8 +15,10 @@ use risc0_zkvm::guest::env;
 
 risc0_zkvm::guest::entry!(main);
 pub fn main() {
-    let sk: Vec<u8> = env::read();
-    let setoffs: Vec<Vec<u8>> = env::read();
+    let sk_str: String = env::read();
+    let sk = hex::decode(&sk_str).unwrap();
+    let setoffs_str: Vec<String> = env::read();
+    let setoffs: Vec<Vec<u8>> = setoffs_str.into_iter().map(|so_str| hex::decode(&so_str).unwrap()).collect();
     check(&sk, &setoffs);
 }
 
