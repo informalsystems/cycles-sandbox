@@ -12,3 +12,4 @@ risc0-zkvm = { version = "0.20.1", default-features = false, features = [ "std" 
 mtcs-core = { path = "../../mtcs-core", default-features = false }
 ecies = { version = "0.2.3", default-features = false, features = ["pure"] }
 serde_json = { version = "1.0.96", default-features = false, features = ["alloc"] }
+hex = { version = "0.4.3", default-features = false }

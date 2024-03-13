@@ -10,3 +10,4 @@ mtcs-core = { path = "../mtcs-core" }
 serde = { version = "1.0", default-features = false }
 ecies = { version = "0.2.3", default-features = false, features = ["pure"] }
 serde_json = { version = "1.0.96", default-features = false }
+hex = { version = "0.4.3", default-features = false }
