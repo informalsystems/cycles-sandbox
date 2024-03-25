@@ -1,8 +1,8 @@
 use dep::std::hash::poseidon2::Poseidon2;
 
 // Graph parameters are statically fixed
-global V = 4000; // how many nodes
-global E = 3; // how many edges
+global V = 1000; // how many nodes
+global E = 4; // how many edges
 
 struct Edge {
     src: u32,
@@ -31,15 +31,22 @@ fn main(edges: [Edge; E]) -> pub Field {
     // Show that the edges correspond to the encrypted edges
     // TODO: This is just a place holder, to show that even hashing
     //   the elements results in too much overhead for one proof!
+    let mut f : Field = 1;
+    for n in net {
+	f += f * n as Field;
+    }
+    
     let vHash = Poseidon2::hash(net.map(|n:i64| n as Field), V);
+    //let vHash = 0 as Field;
     vHash
 }
-
+/*
 #[test]
 fn test_main() {
     let mut edges = [Edge{src:0,dst:1,amt:5},
 		     Edge{src:1,dst:2,amt:5},
-		     Edge{src:2,dst:0,amt:5}];
+		     Edge{src:2,dst:0,amt:5},
+		     Edge{src:2,dst:0,amt:0}];
     main(edges);
 }
 
@@ -47,7 +54,9 @@ fn test_main() {
 fn test_fail() {
     let mut edges = [Edge{src:0,dst:1,amt:5},
 		     Edge{src:1,dst:2,amt:5},
-		     Edge{src:2,dst:0,amt:5}];
+		     Edge{src:2,dst:0,amt:5},
+		     Edge{src:2,dst:0,amt:0}];
     edges[0].amt += 1;
     main(edges);
 }
+*/

@@ -12,3 +12,8 @@ src = "2"
 amt = "42"
 dst = "2"
 src = "0"
+
+[[edges]]
+amt = "0"
+dst = "2"
+src = "0"

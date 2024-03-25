@@ -112,7 +112,6 @@ pub fn update_merkle_tree(tree: &mut Vec<Vec<Fr>>, leaf_index: usize, new_value:
 }
 
 
-#[cfg(test)]
 #[test]
 fn merkle_test() {
     // Compute the root
