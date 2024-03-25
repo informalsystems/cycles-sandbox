@@ -4,6 +4,8 @@ use ark_bn254::{Fr};
 // Compute a merkle tree given an array
 // This function now returns a Vec<Vec<Fr>>, with each inner Vec<Fr> being a layer in the Merkle tree.
 pub fn compute_merkle_tree(arr: &[Fr]) -> Vec<Vec<Fr>> {
+    assert!(arr.len().next_power_of_two() == arr.len());
+    
     let mut poseidon = Poseidon::<Fr>::new_circom(2).unwrap();
     if arr.is_empty() {
         unimplemented!() // Not defined for empty arrays
@@ -11,33 +13,25 @@ pub fn compute_merkle_tree(arr: &[Fr]) -> Vec<Vec<Fr>> {
         return vec![vec![arr[0].clone()]];
     }
 
-    let mid = (arr.len() + 1) / 2; // Adjust mid for odd lengths
+    let mid = arr.len() / 2;
     let left_tree = compute_merkle_tree(&arr[0..mid]);
-    let right_tree = if arr.len() % 2 == 0 {
-        compute_merkle_tree(&arr[mid..])
-    } else {
-        // For odd lengths, duplicate the last part of the left tree.
-        compute_merkle_tree(&arr[mid-1..])
-    };
+    let right_tree = compute_merkle_tree(&arr[mid..]);
+    assert!(left_tree.len() == right_tree.len());
 
     // Combine the left and right trees at each level and add a new root level.
     let mut combined_tree = Vec::new();
-    let max_depth = left_tree.len().max(right_tree.len());
+    let max_depth = left_tree.len();
     for depth in 0..max_depth {
         let mut layer = Vec::new();
-        if depth < left_tree.len() {
-            layer.extend_from_slice(&left_tree[depth]);
-        }
-        if depth < right_tree.len() && depth < left_tree.len() {
-            layer.extend(right_tree[depth].iter().cloned());
-        }
+        layer.extend_from_slice(&left_tree[depth]);
+        layer.extend(right_tree[depth].iter().cloned());
         combined_tree.push(layer);
     }
 
     // Compute and add the new root from the last elements of the left and right trees.
     let new_root = poseidon.hash(&[
 	*combined_tree.last().unwrap().first().unwrap(),
-	*combined_tree.last().unwrap().last().unwrap()
+	*combined_tree.last().unwrap(). last().unwrap()
     ]).unwrap();
     combined_tree.push(vec![new_root]);
 
@@ -45,20 +39,16 @@ pub fn compute_merkle_tree(arr: &[Fr]) -> Vec<Vec<Fr>> {
 }
 
 // Compute just the root
-pub fn compute_merkle_tree2(arr: &[Fr]) -> Fr {
+pub fn compute_merkle_root2(arr: &[Fr]) -> Fr {
+    assert!(arr.len().next_power_of_two() == arr.len());    
     let mut poseidon = Poseidon::<Fr>::new_circom(2).unwrap();
     match arr.len() {
         0 => unimplemented!(),
         1 => arr[0],
         _ => {
             let mid = arr.len() / 2;
-            let left = compute_merkle_tree2(&arr[0..mid]);
-            let right = if arr.len() % 2 == 0 {
-                compute_merkle_tree2(&arr[mid..])
-            } else {
-                // For odd number of elements, duplicate the last one
-                compute_merkle_tree2(&[arr[mid-1].clone(), arr[mid-1].clone()])
-            };
+            let left  = compute_merkle_root2(&arr[0..mid]);
+            let right = compute_merkle_root2(&arr[mid..]);
             poseidon.hash(&[left, right]).unwrap()
         }
     }
@@ -68,22 +58,11 @@ pub fn compute_merkle_tree2(arr: &[Fr]) -> Fr {
 pub fn compute_merkle_path(tree: &Vec<Vec<Fr>>, leaf_index: usize) -> Vec<Fr> {
     let mut path = Vec::new();
     let mut current_index = leaf_index;
-
     for layer in tree.iter().take(tree.len() - 1) { // Exclude the root
         let pair_index = if current_index % 2 == 0 { current_index + 1 } else { current_index - 1 };
-
-        // Check if the pair index is within the current layer's bounds
-        if pair_index < layer.len() {
-            path.push(layer[pair_index].clone());
-        } else {
-            // If not, it means the layer was extended due to an odd number of elements,
-            // so we add the last element of the layer as its own pair.
-            path.push(layer.last().unwrap().clone());
-        }
-
+        path.push(layer[pair_index].clone());
         current_index /= 2; // Move up to the next layer
     }
-
     path
 }
 
@@ -117,20 +96,12 @@ pub fn update_merkle_tree(tree: &mut Vec<Vec<Fr>>, leaf_index: usize, new_value:
     for depth in 0..tree.len() - 1 { // Exclude the root itself
         let pair_index = if current_index % 2 == 0 { current_index + 1 } else { current_index - 1 };
         
-        // Handle the case where the layer size is odd and the current node is the last one
-        let sibling_exists = pair_index < tree[depth].len();
         let parent_index = current_index / 2;
-
-        // Compute the new parent node. If there's no sibling (odd number of nodes), use the current node twice.
-        let new_parent = if sibling_exists {
-            let sibling = &tree[depth][pair_index];
-            if current_index % 2 == 0 {
-                poseidon.hash(&[tree[depth][current_index], *sibling]).unwrap()
-            } else {
-                poseidon.hash(&[*sibling, tree[depth][current_index]]).unwrap()
-            }
+        let sibling = &tree[depth][pair_index];	
+        let new_parent = if current_index % 2 == 0 {
+            poseidon.hash(&[tree[depth][current_index], *sibling]).unwrap()
         } else {
-            poseidon.hash(&[tree[depth][current_index], tree[depth][current_index]]).unwrap()
+            poseidon.hash(&[*sibling, tree[depth][current_index]]).unwrap()
         };
 
         // Update the parent node in the next layer
@@ -138,4 +109,33 @@ pub fn update_merkle_tree(tree: &mut Vec<Vec<Fr>>, leaf_index: usize, new_value:
         current_index = parent_index;
     }
     tree.last().unwrap()[0]
+}
+
+
+#[cfg(test)]
+#[test]
+fn merkle_test() {
+    // Compute the root
+    let arr = (0..16).map(Fr::from).collect::<Vec<Fr>>();
+    let hash = compute_merkle_root2(&arr);
+    
+	// Compute the whole tree
+    let mut tree = compute_merkle_tree(&arr);
+    assert!(hash == tree.last().unwrap()[0]);
+    
+    // Select a path
+    let path = compute_merkle_path(&tree, 2);
+    
+    // Verify the path
+	let root2 = compute_merkle_root(Fr::from(2), 2, &path);
+    assert!(hash == root2);
+    
+    // Update the path
+    let root3 = update_merkle_tree(&mut tree, 3, Fr::from(42));
+    assert!(root3 != root2);
+    
+    // Recompute after updating
+	let path = compute_merkle_path(&tree, 3);
+    let root4 = compute_merkle_root(Fr::from(42), 3, &path);
+    assert!(root3 == root4);
 }

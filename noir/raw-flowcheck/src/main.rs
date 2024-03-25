@@ -10,9 +10,9 @@ fn to_uint(x:&Fr) -> num_bigint::BigUint {
 
 fn main() {
 
-    // Comput the root
-    let arr = (0..8).map(Fr::from).collect::<Vec<Fr>>();
-    let hash = compute_merkle_tree2(&arr);
+    // Compute the root
+    let arr = (0..16).map(Fr::from).collect::<Vec<Fr>>();
+    let hash = compute_merkle_root2(&arr);
     println!("root hash {:?}", to_uint(&hash));
 
     // Compute the whole tree
@@ -27,7 +27,7 @@ fn main() {
     assert!(hash == root2);
 
     // Update the path
-    let root3 = update_merkle_tree(&mut tree, 3, Fr::from(42));    
+    let root3 = update_merkle_tree(&mut tree, 3, Fr::from(42));
     assert!(root3 != root2);
 
     // Recompute after updating
