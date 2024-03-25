@@ -1,13 +1,13 @@
-use light_poseidon::{Poseidon, PoseidonHasher, parameters::bn254_x5};
-use ark_bn254::{Fr, FrConfig};
-use ark_ff::{BigInteger, PrimeField, Fp, MontBackend};
+use light_poseidon::{Poseidon, PoseidonHasher};
+use ark_bn254::{Fr};
+
 
 // Compute a merkle tree given an array
 // This function now returns a Vec<Vec<Fr>>, with each inner Vec<Fr> being a layer in the Merkle tree.
 fn compute_merkle_tree(arr: &[Fr]) -> Vec<Vec<Fr>> {
     let mut poseidon = Poseidon::<Fr>::new_circom(2).unwrap();
     if arr.is_empty() {
-        return unimplemented!(); // Not defined for empty arrays
+        unimplemented!() // Not defined for empty arrays
     } else if arr.len() == 1 {
         return vec![vec![arr[0].clone()]];
     }
@@ -95,8 +95,7 @@ pub fn compute_merkle_root(leaf: Fr, index: usize, hash_path: &[Fr]) -> Fr {
     let mut current_index = index;
     let mut current = leaf;
     for i in 0..n {
-	let pair_index = if current_index % 2 == 0 { current_index + 1 } else { current_index - 1 };
-        let path_bit = pair_index != 0;
+        let path_bit = current_index % 2 != 0;
         let (hash_left, hash_right) = if path_bit {
             (hash_path[i], current)
         } else {
@@ -108,22 +107,69 @@ pub fn compute_merkle_root(leaf: Fr, index: usize, hash_path: &[Fr]) -> Fr {
     current
 }
 
+// Update an element of the tree
+fn update_merkle_tree(tree: &mut Vec<Vec<Fr>>, leaf_index: usize, new_value: Fr) -> Fr {
+    let mut poseidon = Poseidon::<Fr>::new_circom(2).unwrap();    
+    // Step 1: Update the leaf node
+    tree[0][leaf_index] = new_value;
+
+    // Step 2: Update the path from the updated leaf to the root
+    let mut current_index = leaf_index;
+    for depth in 0..tree.len() - 1 { // Exclude the root itself
+        let pair_index = if current_index % 2 == 0 { current_index + 1 } else { current_index - 1 };
+        
+        // Handle the case where the layer size is odd and the current node is the last one
+        let sibling_exists = pair_index < tree[depth].len();
+        let parent_index = current_index / 2;
+
+        // Compute the new parent node. If there's no sibling (odd number of nodes), use the current node twice.
+        let new_parent = if sibling_exists {
+            let sibling = &tree[depth][pair_index];
+            if current_index % 2 == 0 {
+                poseidon.hash(&[tree[depth][current_index], *sibling]).unwrap()
+            } else {
+                poseidon.hash(&[*sibling, tree[depth][current_index]]).unwrap()
+            }
+        } else {
+            poseidon.hash(&[tree[depth][current_index], tree[depth][current_index]]).unwrap()
+        };
+
+        // Update the parent node in the next layer
+        tree[depth + 1][parent_index] = new_parent;
+        current_index = parent_index;
+    }
+    tree.last().unwrap()[0]
+}
+
+// For printing
+fn to_uint(x:&Fr) -> num_bigint::BigUint {
+    (*x).into()
+}
+
 fn main() {
 
     // Comput the root
-    let hash = compute_merkle_tree2(&[Fr::from(55); 8]);
-    let b :num_bigint::BigUint = hash.into();
-    println!("{:?}", b);
+    let arr = (0..8).map(Fr::from).collect::<Vec<Fr>>();
+    let hash = compute_merkle_tree2(&arr);
+    println!("root hash {:?}", to_uint(&hash));
 
     // Compute the whole tree
-    let tree = compute_merkle_tree(&[Fr::from(55); 8]);
-    assert!(hash == *tree.last().unwrap().first().unwrap());
+    let mut tree = compute_merkle_tree(&arr);
+    assert!(hash == tree.last().unwrap()[0]);
 
     // Select a path
     let path = compute_merkle_path(&tree, 2);
 
     // Verify the path
-    let root2 = compute_merkle_root(Fr::from(55), 2, &path);
+    let root2 = compute_merkle_root(Fr::from(2), 2, &path);
     assert!(hash == root2);
 
+    // Update the path
+    let root3 = update_merkle_tree(&mut tree, 3, Fr::from(42));    
+    assert!(root3 != root2);
+
+    // Recompute after updating
+    let path = compute_merkle_path(&tree, 3);
+    let root4 = compute_merkle_root(Fr::from(42), 3, &path);
+    assert!(root3 == root4);
 }
