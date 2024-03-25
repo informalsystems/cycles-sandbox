@@ -28,8 +28,9 @@ fn main(edges: [Edge; E]) -> pub Field {
 	assert(n == 0);
     }
 
-    // Accumulate residual graph into a Merkle tree
-    // TODO: subtract the residual graph...
+    // Show that the edges correspond to the encrypted edges
+    // TODO: This is just a place holder, to show that even hashing
+    //   the elements results in too much overhead for one proof!
     let vHash = Poseidon2::hash(net.map(|n:i64| n as Field), V);
     vHash
 }
