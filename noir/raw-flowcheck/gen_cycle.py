@@ -1,8 +1,10 @@
 import random
 from collections import defaultdict
 
-V = 16
-E = 32
+#V = 65536
+#E = 262144
+V = 64
+E = 128
 
 edges = defaultdict(lambda: 0)
 while len(edges) < E:
