@@ -1,0 +1,19 @@
+[[edges]]
+amt = "42"
+dst = "0"
+src = "1"
+
+[[edges]]
+amt = "42"
+dst = "1"
+src = "2"
+
+[[edges]]
+amt = "42"
+dst = "2"
+src = "0"
+
+[[edges]]
+amt = "0"
+dst = "2"
+src = "0"
