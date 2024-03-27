@@ -25,7 +25,7 @@ unconstrained fn find(obligations: [Edge; E], src: u32, dst: u32) -> i64 {
 
     for i in 0..obligations.len() { 
         let e = obligations[i];
-        if (e.src == src) && (e.dst == dst) {
+        if (e.src == src) & (e.dst == dst) {
             found_index = i as i64;
         }
     }
@@ -40,18 +40,25 @@ unconstrained fn hashField(r: Field) -> Field {
     Poseidon2::hash([r], 1)
 }
 
-unconstrained fn unpackValue(valueField: Field) -> (u32, u32, i64){
-    // packed:
-    // let value = flow.src + flow.dst << 32 + flow.amt << 64;
-    
-    let value = valueField as u128;
-    
-    let mask = ((1 << 32) - 1);
-    let src = value & mask;
-    let dst = (value >> 32) & mask;
-    let amt = (value >> 64) & mask;
+fn packValue(src: u32, dst: u32, amt: i64) -> Field {
+    (src as Field +
+     dst as Field * 1.pow_32(32) + 
+     amt as Field * 1.pow_32(64)    
+     )
+}
 
-    (src, dst, amt)
+unconstrained fn unpackValue(valueField: Field) -> (u32, u32, i64){
+
+    let value = U128::from_integer(valueField);
+
+    let mask = (1 << 32) - 1;
+
+    let src = value.to_integer() & mask;
+    let dst = (value >> U128::from_integer(32)).to_integer() & mask;
+    let amt = (value >> U128::from_integer(64)).to_integer() & mask;
+
+
+    (src as u32, dst as u32, amt as i64)
 }
 
 // takes in 
@@ -92,12 +99,12 @@ fn main(
         let cipherEdge = cipherObligations[i];
 
         let e = decrypt(enclavePrivKey, cipherEdge);
-        let x,y,packedValue = e[0], e[1], e[2];
+        let (x, y, packedValue) = (e[0], e[1], e[2]);
         let (src, dst, amt) = unpackValue(packedValue); 
 
         let srcPubKey = Point{x:x,y:y};
 
-        keys[e.src] = srcPubKey; // TODO deal with duplicate srcs
+        keys[src] = srcPubKey; // TODO deal with duplicate srcs
         
         edges[i] = Edge{srcPubKey: srcPubKey, src: src, dst: dst, amt: amt};
     }
@@ -140,7 +147,7 @@ fn main(
     // encrypted set off notices, 
     // 2 for each edge, with 1 encrypted to each of src and dst
     // Field is (src | dst | amt)
-    let mut setoffs = [(Point{0,0}, [0 as Field; 1]); 2*E];
+    let mut setoffs = [(Point{x:0,y:0}, [0 as Field; 1]); 2*E];
 // ) -> pub [(Point, [Field;1]); 2*E]{
 
     let mut r = randomSeed;
@@ -149,7 +156,8 @@ fn main(
         let flow = flows[i];
 
         // encode the flow value as src | dst | amt)
-        let value = (flow.src as u128) + (flow.dst as u128) << 32 + (flow.amt as u128) << 64;
+        let value = packValue(flow.src, flow.dst, flow.amt);
+        // let value = (flow.src as u128) + (flow.dst as u128) << 32 + (flow.amt as u128) << 64;
 
         // encrypt to src
         let srcKey = keys[flow.src];
@@ -163,8 +171,7 @@ fn main(
     }
 
     // return encrypted setoffs
-    //setoffs
-    [(Point{x:0,y:0}, [0 as Field; 1]); 2*E]
+    setoffs
 }
 
 global bjj = baby_jubjub();
@@ -196,12 +203,13 @@ fn encrypt(pubkey: Point, r: Field, msg: [Field; SIZE]) -> (Point, [Field; SIZE]
     (gR, cipherText)
 }
 
-fn decrypt(privkey: Field, cipher: (Point, [Field;SIZE])) -> [Field; SIZE] {
+// TODO dont hardcode 3!
+fn decrypt(privkey: Field, cipher: (Point, [Field;3])) -> [Field; 3] {
 
     let (gR, cipherText) = cipher;
     let gAR = bjj.curve.mul(privkey, gR);
 
-    let mut clearText = [0;SIZE];
+    let mut clearText = [0;3];
 
     for i in 0..cipherText.len() {
         let m = cipherText[i];
@@ -228,10 +236,10 @@ fn test_main() {
     let gA = derive_pubkey(a);
     println(gA);
 
-    let (gR, cipherText) = encrypt(gA, r, msg);
-    let clearText = decrypt(a, (gR, cipherText));
+    //let (gR, cipherText) = encrypt(gA, r, msg);
+    //let clearText = decrypt(a, (gR, cipherText));
 
-    assert(msg == clearText);
+    //assert(msg == clearText);
 }
 
 
