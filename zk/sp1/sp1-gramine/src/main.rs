@@ -15,7 +15,7 @@ fn main() {
     stdin.write(&2u32);
 
     // Setup the program for proving.
-    let (pk, vk) = client.setup(FIBONACCI_ELF);
+    let (pk, _) = client.setup(FIBONACCI_ELF);
 
     // Generate the proof
     let proof = client
@@ -25,7 +25,5 @@ fn main() {
 
     println!("Successfully generated proof!");
 
-    // Verify the proof.
-    client.verify(&proof, &vk).expect("failed to verify proof");
-    println!("Successfully verified proof!");
+    proof.save("/tmp/proof.bin").expect("saving proof failed");
 }
