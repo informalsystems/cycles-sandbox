@@ -25,5 +25,10 @@ fn main() {
 
     println!("Successfully generated proof!");
 
-    proof.save("/tmp/proof.bin").expect("saving proof failed");
+    let proof_hex = {
+        let proof_bytes: Vec<u8> = bincode::serialize(&proof).expect("infallible serializer");
+        hex::encode(proof_bytes)
+    };
+
+    println!("{proof_hex}");
 }
