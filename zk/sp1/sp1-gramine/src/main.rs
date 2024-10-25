@@ -1,13 +1,9 @@
+use cosmwasm_std::Binary;
+use sp1_cw::msg::ExecuteMsg;
 use sp1_sdk::{ProverClient, SP1Stdin};
 
 /// The ELF (executable and linkable format) file for the Succinct RISC-V zkVM.
-pub const FIBONACCI_ELF: &[u8] = include_bytes!("../data/riscv32im-succinct-zkvm-elf");
-
-#[derive(Debug)]
-pub struct VerifierParams {
-    pub proof: String,
-    pub verifying_key: String,
-}
+pub const ELF: &[u8] = include_bytes!("../data/riscv32im-succinct-zkvm-elf");
 
 fn main() {
     // Setup the logger.
@@ -21,7 +17,7 @@ fn main() {
     stdin.write(&2u32);
 
     // Setup the program for proving.
-    let (pk, vk) = client.setup(FIBONACCI_ELF);
+    let (pk, vk) = client.setup(ELF);
 
     // Generate the proof
     let proof = client
@@ -29,16 +25,18 @@ fn main() {
         .run()
         .expect("failed to generate proof");
 
-    println!("Successfully generated proof!");
-
-    let output = VerifierParams {
-        proof: bincode_serialize_hex(proof),
-        verifying_key: bincode_serialize_hex(vk),
+    let verify_proof_msg = ExecuteMsg::VerifyProof {
+        proof_bytes: bin_serialize(proof),
+        verifying_key_bytes: bin_serialize(vk),
     };
-    println!("{output:#?}");
+
+    println!(
+        "{}",
+        serde_json::to_string(&verify_proof_msg).expect("infallible serializer")
+    );
 }
 
-fn bincode_serialize_hex(value: impl serde::Serialize) -> String {
-    let vk_bytes: Vec<u8> = bincode::serialize(&value).expect("infallible serializer");
-    hex::encode(vk_bytes)
+fn bin_serialize(value: impl serde::Serialize) -> Binary {
+    let bytes: Vec<u8> = bincode::serialize(&value).expect("infallible serializer");
+    bytes.into()
 }
