@@ -1,6 +1,6 @@
 use cosmwasm_std::Binary;
 use sp1_cw::msg::ExecuteMsg;
-use sp1_sdk::{ProverClient, SP1Proof, SP1Stdin};
+use sp1_sdk::{ProverClient, SP1Stdin};
 
 /// The ELF (executable and linkable format) file for the Succinct RISC-V zkVM.
 pub const ELF: &[u8] = include_bytes!("../data/riscv32im-succinct-zkvm-elf");
