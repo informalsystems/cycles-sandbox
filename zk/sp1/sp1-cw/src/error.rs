@@ -6,8 +6,8 @@ pub enum ContractError {
     Std(StdError),
 
     Unauthorized {},
-    // Add any other custom errors you like here.
-    // Look at https://docs.rs/thiserror/1.0.21/thiserror/ for details.
+
+    SP1Verification,
 }
 
 impl Display for ContractError {
