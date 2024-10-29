@@ -1,5 +1,6 @@
-use cosmwasm_std::StdError;
 use std::fmt::{Display, Formatter};
+
+use cosmwasm_std::StdError;
 
 #[derive(Debug)]
 pub enum ContractError {
@@ -7,7 +8,7 @@ pub enum ContractError {
 
     Unauthorized {},
 
-    SP1Verification,
+    SP1Verification(String),
 }
 
 impl Display for ContractError {

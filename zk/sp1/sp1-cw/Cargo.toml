@@ -32,13 +32,6 @@ optimize = """docker run --rm -v "$(pwd)":/code \
 """
 
 [dependencies]
-bincode = { version = "1.3.3", default-features = false }
 cosmwasm-schema = { version = "2.1.0", default-features = false }
 cosmwasm-std = { version = "2.1.0", default-features = false, features = ["std"] }
-itertools = { version = "0.13.0", default-features = false }
-p3-field = { version = "=0.1.4-succinct", default-features = false }
-serde = { version = "1.0.213", default-features = false, features = ["derive"] }
-sp1-primitives = { version = "3.0.0-rc4", default-features = false }
-sp1-core-machine = { version = "3.0.0-rc4", default-features = false }
-sp1-prover = { version = "3.0.0-rc4", default-features = false }
-sp1-stark = { version = "3.0.0", default-features = false }
+sp1-verifier = { git = "https://github.com/succinctlabs/sp1.git", branch = "yuwen/verifier-crate", default-features = false }

@@ -7,8 +7,10 @@ pub struct InstantiateMsg {}
 #[cw_serde]
 pub enum ExecuteMsg {
     VerifyProof {
-        proof_bytes: Binary,
-        verifying_key_bytes: Binary,
+        proof: Binary,
+        public_inputs: Binary,
+        vk_hash: String,
+        vk: Binary,
     },
 }
 
