@@ -12,6 +12,7 @@ pub enum ExecuteMsg {
         vk_hash: String,
         vk: Binary,
     },
+    VerifyBls12PairingEquality {},
 }
 
 #[cw_serde]

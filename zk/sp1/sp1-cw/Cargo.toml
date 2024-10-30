@@ -33,5 +33,6 @@ optimize = """docker run --rm -v "$(pwd)":/code \
 
 [dependencies]
 cosmwasm-schema = { version = "2.1.0", default-features = false }
-cosmwasm-std = { version = "2.1.0", default-features = false, features = ["std"] }
+cosmwasm-std = { version = "2.1.0", default-features = false, features = ["std", "cosmwasm_2_1"] }
+hex-literal = "0.4.1"
 sp1-verifier = { git = "https://github.com/succinctlabs/sp1.git", branch = "yuwen/verifier-crate", default-features = false }
