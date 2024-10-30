@@ -3,16 +3,16 @@
 # Deploy the specified contract's `WASM_BIN` to the chain specified by `CHAIN_ID` using the `USER_ADDR` account.
 set -eo pipefail
 
-USER_ADDR=${USER_ADDR:-$(wasmd keys show -a admin)}
+USER_ADDR=${USER_ADDR:-$(neutrond keys show -a admin)}
 WASM_BIN="$1"
-CHAIN_ID=${CHAIN_ID:-testing}
-NODE_URL=${NODE_URL:-127.0.0.1:26657}
+CHAIN_ID=${CHAIN_ID:-pion-1}
+NODE_URL=${NODE_URL:-https://rpc-falcron.pion-1.ntrn.tech}
 LABEL=${LABEL:-sp1-verifier}
 COUNT=${COUNT:-0}
 ROOT=${ROOT:-.}
 WASM_BIN_DIR="$ROOT/target/wasm32-unknown-unknown/release"
-TXFLAG="--chain-id ${CHAIN_ID} --gas-prices 0.0025ucosm --gas auto --gas-adjustment 1.8"
-CMD="wasmd --node http://$NODE_URL"
+TXFLAG="--chain-id ${CHAIN_ID} --gas-prices 0.025untrn --gas auto --gas-adjustment 1.8"
+CMD="neutrond --node $NODE_URL"
 
 # Deploy Contract
 echo "$WASM_BIN_DIR/$WASM_BIN"
@@ -30,7 +30,7 @@ while ! $CMD query tx $TX_HASH &> /dev/null; do
 done
 
 RES=$($CMD query tx "$TX_HASH" --output json)
-CODE_ID=$(echo $RES | jq -r '.logs[0].events[1].attributes[1].value')
+CODE_ID=$(echo $RES | jq -r '.events[] | select(.type=="store_code") | .attributes[] | select(.key=="code_id") | .value')
 echo $CODE_ID
 
 echo ""
