@@ -13,6 +13,7 @@ pub enum ExecuteMsg {
         vk: Binary,
     },
     VerifyBls12PairingEquality {},
+    VerifyBls12PairingEqualityRaw {},
 }
 
 #[cw_serde]
