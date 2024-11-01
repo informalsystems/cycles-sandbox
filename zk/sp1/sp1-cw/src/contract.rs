@@ -5,9 +5,9 @@ use cosmwasm_std::{
     BLS12_381_G1_GENERATOR,
 };
 use hex_literal::hex;
-use sp1_verifier::Groth16Verifier;
 
 use crate::error::ContractError;
+use crate::groth16::{Frame, Groth16Verifier};
 use crate::msg::{ExecuteMsg, InstantiateMsg, QueryMsg};
 use crate::ContractError::SP1Verification;
 
@@ -57,6 +57,24 @@ pub fn execute(
             Ok(Response::new()
                 .add_attribute("verification", if verified { "passed" } else { "failed" }))
         }
+        ExecuteMsg::VerifyProofFrame {
+            proof,
+            public_inputs,
+            vk_hash,
+            vk,
+            frame,
+        } => Groth16Verifier::verify_frame(
+            &proof,
+            &public_inputs,
+            &vk_hash,
+            &vk,
+            Frame::from_u8(frame),
+        )
+        .map(|verified| {
+            Response::new()
+                .add_attribute("verification", if verified { "passed" } else { "failed" })
+        })
+        .map_err(|e| SP1Verification(e.to_string())),
     }
 }
 

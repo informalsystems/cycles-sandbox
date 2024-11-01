@@ -14,6 +14,13 @@ pub enum ExecuteMsg {
     },
     VerifyBls12PairingEquality {},
     VerifyBls12PairingEqualityRaw {},
+    VerifyProofFrame {
+        proof: Binary,
+        public_inputs: Binary,
+        vk_hash: String,
+        vk: Binary,
+        frame: u8,
+    },
 }
 
 #[cw_serde]
