@@ -21,6 +21,10 @@ pub enum ExecuteMsg {
         vk: Binary,
         frame: u8,
     },
+    VerifyCompressedProof {
+        proof_bytes: Binary,
+        verifying_key_bytes: Binary,
+    },
 }
 
 #[cw_serde]

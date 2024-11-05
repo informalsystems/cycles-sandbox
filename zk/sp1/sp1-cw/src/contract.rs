@@ -1,10 +1,11 @@
 #[cfg(not(feature = "library"))]
 use cosmwasm_std::entry_point;
 use cosmwasm_std::{
-    Binary, Deps, DepsMut, Env, HashFunction, MessageInfo, Response, StdResult,
+    Binary, Deps, DepsMut, Env, HashFunction, MessageInfo, Response, StdError, StdResult,
     BLS12_381_G1_GENERATOR,
 };
 use hex_literal::hex;
+use sp1_verifier::{CompressVerifier, SP1CompressedBundle, SP1VerifyingKey};
 
 use crate::error::ContractError;
 use crate::groth16::{Frame, Groth16Verifier};
@@ -75,6 +76,28 @@ pub fn execute(
                 .add_attribute("verification", if verified { "passed" } else { "failed" })
         })
         .map_err(|e| SP1Verification(e.to_string())),
+        ExecuteMsg::VerifyCompressedProof {
+            proof_bytes,
+            verifying_key_bytes,
+        } => {
+            let verifier = CompressVerifier::new();
+
+            let proof: SP1CompressedBundle = bincode::deserialize(&proof_bytes).map_err(|e| {
+                ContractError::Std(StdError::parse_err(
+                    "SP1ProofWithPublicValues",
+                    e.to_string(),
+                ))
+            })?;
+
+            let vk: SP1VerifyingKey = bincode::deserialize(&verifying_key_bytes).map_err(|e| {
+                ContractError::Std(StdError::parse_err("SP1VerifyingKey", e.to_string()))
+            })?;
+
+            verifier
+                .verify_compressed(&proof, &vk)
+                .map(|_| Response::new().add_attribute("verification", "passed"))
+                .map_err(|e| SP1Verification(e.to_string()))
+        }
     }
 }
 
