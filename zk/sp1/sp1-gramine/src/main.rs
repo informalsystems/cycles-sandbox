@@ -22,11 +22,11 @@ fn main() {
     // Generate the proof
     let proof = client
         .prove(&pk, stdin)
-        .groth16()
+        .compressed()
         .run()
         .expect("failed to generate proof");
 
-    let verify_proof_msg = ExecuteMsg::VerifyProof {
+    let verify_proof_msg = ExecuteMsg::VerifyCompressedProof {
         proof_bytes: bin_serialize(proof),
         verifying_key_bytes: bin_serialize(vk),
     };
