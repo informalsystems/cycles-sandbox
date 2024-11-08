@@ -1,20 +1,38 @@
-use std::{
-    fs::File,
-    io::{self, Read, Write},
-};
+use std::error::Error;
+use std::process::{Command, Output, Stdio};
 
-fn main() -> io::Result<()> {
-    let user_data = [0u8; 64];
-    let mut user_report_data = File::create("/dev/attestation/user_report_data")?;
-    user_report_data.write_all(user_data.as_slice())?;
-    user_report_data.flush()?;
+fn run_command(cmd: &str, args: &[&str]) -> Result<Output, Box<dyn Error>> {
+    let output = Command::new(cmd)
+        .args(args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()?;
 
-    let mut file = File::open("/dev/attestation/quote")?;
-    let mut buffer = Vec::new();
-    file.read_to_end(&mut buffer)?;
+    if output.status.success() {
+        println!(
+            "{} {} output:\n{}",
+            cmd,
+            args.join(" "),
+            String::from_utf8_lossy(&output.stdout)
+        );
+    } else {
+        eprintln!(
+            "{} {} failed:\n{}",
+            cmd,
+            args.join(" "),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
 
-    let quote_hex = hex::encode(&buffer);
-    print!("{}", quote_hex);
+    Ok(output)
+}
+
+fn main() -> Result<(), Box<dyn Error>> {
+    println!("Running 'nargo execute'...");
+    run_command("nargo", &["execute"])?;
+
+    println!("Running 'bb prove'...");
+    run_command("bb", &["prove"])?;
 
     Ok(())
 }

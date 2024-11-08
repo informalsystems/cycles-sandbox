@@ -22,6 +22,8 @@ fs.mounts = [
   { uri = "file:{{ arch_libdir }}", path = "{{ arch_libdir }}" },
   { uri = "file:/usr/{{ arch_libdir }}", path = "/usr{{ arch_libdir }}" },
   { uri = "file:{{ bin_path }}", path = "{{ bin_path }}" },
+  { uri = "file:{{ nargo_path }}", path = "{{ nargo_path }}" },
+  { uri = "file:{{ bb_path }}", path = "{{ bb_path }}" },
 ]
 
 sgx.enclave_size = "512M"
@@ -34,6 +36,8 @@ sgx.ra_client_linkable = {{ 'true' if ra_client_linkable == '1' else 'false' }}
 sgx.trusted_files = [
   "file:{{ gramine.libos }}",
   "file:{{ bin_path }}",
+  "file:{{ nargo_path }}",
+  "file:{{ bb_path }}",
   "file:{{ gramine.runtimedir() }}/",
   "file:{{ arch_libdir }}/",
   "file:/usr/{{ arch_libdir }}/",
