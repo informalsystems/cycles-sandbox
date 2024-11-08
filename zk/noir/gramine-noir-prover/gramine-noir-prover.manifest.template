@@ -22,8 +22,8 @@ fs.mounts = [
   { uri = "file:{{ arch_libdir }}", path = "{{ arch_libdir }}" },
   { uri = "file:/usr/{{ arch_libdir }}", path = "/usr{{ arch_libdir }}" },
   { uri = "file:{{ bin_path }}", path = "{{ bin_path }}" },
-  { uri = "file:{{ nargo_path }}", path = "{{ nargo_path }}" },
-  { uri = "file:{{ bb_path }}", path = "{{ bb_path }}" },
+  { uri = "file:{{ nargo_path }}", path = "/usr/bin/nargo" },
+  { uri = "file:{{ bb_path }}", path = "/usr/bin/bb" },
 ]
 
 sgx.enclave_size = "512M"
