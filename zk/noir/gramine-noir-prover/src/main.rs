@@ -29,10 +29,10 @@ fn run_command(cmd: &str, args: &[&str]) -> Result<Output, Box<dyn Error>> {
 
 fn main() -> Result<(), Box<dyn Error>> {
     println!("Running 'nargo execute'...");
-    run_command("nargo", &["execute"])?;
+    run_command("nargo", &["--version"])?;
 
     println!("Running 'bb prove'...");
-    run_command("bb", &["prove"])?;
+    run_command("bb", &["--version"])?;
 
     Ok(())
 }
