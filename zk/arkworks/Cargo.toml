@@ -1,5 +1,5 @@
 [package]
-name = "arkworks-cw"
+name = "zk-cw"
 version = "0.1.0"
 authors = ["Shoaib Ahmed <sufialhussaini@gmail.com>"]
 edition = "2021"
@@ -44,16 +44,11 @@ schemars = "0.8.16"
 serde = { version = "1.0.197", default-features = false, features = ["derive"] }
 thiserror = { version = "1.0.58" }
 
-ark-ff = { default-features = false, version = "0.4.2" }
 ark-groth16 = { default-features = false, version = "0.4.0" }
 ark-relations = { default-features = false, version = "0.4" }
 ark-serialize = { default-features = false, version = "0.4.2" }
 ark-snark = { default-features = false, version = "0.4.0" }
-#decaf377 = { default-features = false, features = ["r1cs"], version = "0.10.1" }
-#decaf377-rdsa = { default-features = false, version = "0.11.0" }
 ark-bls12-381 = { default-features = false, features = ["curve"], version = "0.4.0" }
-
-#getrandom = { version = "0.2.15", features = ["js"] }
+ark-ec = { default-features = false, version = "0.4.0" }
 
 [dev-dependencies]
-cw-multi-test = "2.0.0"
