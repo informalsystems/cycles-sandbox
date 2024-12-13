@@ -5,9 +5,7 @@ pub struct InstantiateMsg {}
 
 #[cw_serde]
 pub enum ExecuteMsg {
-    Verify {},
-    VerifyCwCrypto {},
-    // Pairing {},
+    PenumbraShieldedGraph {},
 }
 
 #[cw_serde]

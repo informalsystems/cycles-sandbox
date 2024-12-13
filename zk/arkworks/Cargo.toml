@@ -3,6 +3,7 @@ name = "zk-cw"
 version = "0.1.0"
 authors = ["Shoaib Ahmed <sufialhussaini@gmail.com>"]
 edition = "2021"
+resolver = "2"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -32,25 +33,19 @@ optimize = """docker run --rm -v "$(pwd)":/code \
 """
 
 [dependencies]
-cosmwasm-schema = "2.1.0"
+cosmwasm-schema = { default-features = false, version = "2.1.0" }
 cosmwasm-std = { version = "2.1.0", default-features = false, features = [
     "cosmwasm_1_4",
     # Enable this if you only deploy to chains that have CosmWasm 2.0 or higher
-    # "cosmwasm_2_0",
+#     "cosmwasm_2_0",
 ] }
-cosmwasm-crypto = "2.1.0"
-cw-storage-plus = "2.0.0"
-cw2 = "2.0.0"
-schemars = "0.8.16"
-serde = { version = "1.0.197", default-features = false, features = ["derive"] }
-thiserror = { version = "1.0.58" }
+cw-storage-plus = { default-features = false, version = "2.0.0" }
+cw2 = { default-features = false, version = "2.0.0" }
 
-ark-groth16 = { default-features = false, version = "0.4.0" }
-ark-relations = { default-features = false, version = "0.4" }
-ark-serialize = { default-features = false, version = "0.4.2" }
-ark-snark = { default-features = false, version = "0.4.0" }
-ark-bls12-381 = { default-features = false, features = ["curve"], version = "0.4.0" }
-ark-ec = { default-features = false, version = "0.4.0" }
-num-traits = "0.2.19"
+penumbra-shielded-graph = { default-features = false, path = "../../../penumbra/crates/core/component/shielded-graph" }
+penumbra-proof-params = { default-features = false, path = "../../../penumbra/crates/crypto/proof-params" }
+penumbra-asset = { default-features = false, path = "../../../penumbra/crates/core/asset" }
+
+getrandom = { version = "0.2.15", features = ["js"] }
 
 [dev-dependencies]
