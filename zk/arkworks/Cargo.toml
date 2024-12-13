@@ -38,6 +38,7 @@ cosmwasm-std = { version = "2.1.0", default-features = false, features = [
     # Enable this if you only deploy to chains that have CosmWasm 2.0 or higher
     # "cosmwasm_2_0",
 ] }
+cosmwasm-crypto = "2.1.0"
 cw-storage-plus = "2.0.0"
 cw2 = "2.0.0"
 schemars = "0.8.16"
@@ -50,5 +51,6 @@ ark-serialize = { default-features = false, version = "0.4.2" }
 ark-snark = { default-features = false, version = "0.4.0" }
 ark-bls12-381 = { default-features = false, features = ["curve"], version = "0.4.0" }
 ark-ec = { default-features = false, version = "0.4.0" }
+num-traits = "0.2.19"
 
 [dev-dependencies]
