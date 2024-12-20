@@ -73,11 +73,28 @@ pub fn execute(
             let vk = VerifyingKey::deserialize_uncompressed_unchecked(OUTPUT_PROOF_VERIFYING_KEY)
                 .expect("can deserialize VerifyingKey");
             let verified = verify(proof.to_array()?, public_inputs.as_slice(), &vk.into())?;
-            Ok(Response::new().add_attribute(
-                "verification",
-                if verified { "execute" } else { "unverified" },
-            ))
+            Ok(Response::new()
+                .add_attribute("verification", if verified { "passed" } else { "failed" }))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use cosmwasm_std::HexBinary;
+
+    use super::*;
+
+    #[test]
+    fn test_verify() {
+        let vk: PreparedVerifyingKey<Bls12_377> =
+            VerifyingKey::deserialize_uncompressed_unchecked(OUTPUT_PROOF_VERIFYING_KEY)
+                .expect("can deserialize VerifyingKey")
+                .into();
+        let proof = HexBinary::from_hex("08f791e07165a2b9b4f98732f4326013ffc59286586b22aae0fe0bdff0b6150b631e24fc21765cfad22c7d220ded820154022fdfc194d523e4e3828836b919b722774c77e37ccd0937edb5928d69840ff1a50d7ff8f2f34db24f1f12970824018016d04fcae7714294952a65dc53dda104751ec26e02427e77b3971ac4fdca3e1c20117e51a6fa564a83a6b79fe60f81a040075383626f25b17561ddc9195526e49280ae11bcd5e920af23d6204b48c2e2f55d772cc1661d9e969411ca671a00").unwrap();
+        let public_inputs = HexBinary::from_hex("02000000000000006502c5281a48ea6499dfdd0b1e2571be402556d07195fa5429845d14e91632057ad10727b3d29e1c273348f53bd6b4d83a59d89ee0a8eebfb4432423afe05206").unwrap();
+        let verified = verify(proof.to_array().unwrap(), public_inputs.as_slice(), &vk).unwrap();
+        assert!(verified);
     }
 }
 
