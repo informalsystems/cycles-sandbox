@@ -1,19 +1,24 @@
 #[cfg(not(feature = "library"))]
 use cosmwasm_std::entry_point;
-use cosmwasm_std::{Binary, Deps, DepsMut, Env, HexBinary, MessageInfo, Response, StdResult};
+use cosmwasm_std::{Binary, Deps, DepsMut, Env, MessageInfo, Response, StdResult};
 use cw2::set_contract_version;
 
-use penumbra_asset::balance::Commitment as BalanceCommitment;
-use penumbra_proof_params::OUTPUT_PROOF_VERIFICATION_KEY;
-use penumbra_shielded_graph::{note::StateCommitment, output::OutputProofPublic, OutputProof};
+use ark_groth16::r1cs_to_qap::LibsnarkReduction;
+use ark_groth16::{Groth16, PreparedVerifyingKey, Proof, VerifyingKey};
+use ark_serialize::CanonicalDeserialize;
+use ark_snark::SNARK;
+use decaf377::{Bls12_377, Fq};
 
-use crate::error::ContractError;
+use crate::error::{ContractError, Groth16VerificationError};
 use crate::msg::{ExecuteMsg, InstantiateMsg, QueryMsg};
 use crate::state::{State, STATE};
 
 // version info for migration info
 const CONTRACT_NAME: &str = "crates.io:zk-cw";
 const CONTRACT_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+const GROTH16_PROOF_LENGTH_BYTES: usize = 192;
+const OUTPUT_PROOF_VERIFYING_KEY: &[u8] = include_bytes!("../data/output_vk.param");
 
 #[cfg_attr(not(feature = "library"), entry_point)]
 pub fn instantiate(
@@ -33,6 +38,26 @@ pub fn instantiate(
         .add_attribute("owner", info.sender))
 }
 
+pub fn verify(
+    proof_bytes: [u8; GROTH16_PROOF_LENGTH_BYTES],
+    public_inputs_bytes: &[u8],
+    verifying_key: &PreparedVerifyingKey<Bls12_377>,
+) -> Result<bool, Groth16VerificationError> {
+    let proof = Proof::deserialize_compressed_unchecked(&proof_bytes[0..])
+        .map_err(Groth16VerificationError::ProofDeserialization)?;
+
+    let public_inputs = Vec::<Fq>::deserialize_compressed_unchecked(public_inputs_bytes)
+        .map_err(Groth16VerificationError::PublicInputsDeserialization)?;
+
+    let verified = Groth16::<Bls12_377, LibsnarkReduction>::verify_with_processed_vk(
+        verifying_key,
+        public_inputs.as_slice(),
+        &proof,
+    )?;
+
+    Ok(verified)
+}
+
 #[cfg_attr(not(feature = "library"), entry_point)]
 pub fn execute(
     _deps: DepsMut,
@@ -41,30 +66,17 @@ pub fn execute(
     msg: ExecuteMsg,
 ) -> Result<Response, ContractError> {
     match msg {
-        ExecuteMsg::PenumbraShieldedGraph {} => {
-            let proof_bytes = HexBinary::from_hex("e4f570fe3fa4e8f58b3ce7f23a9f7539d3a8821f80b901b1a5c4e15902086ef10ce1b7f011afcf95c44a49895fb0a5016b1c5ed814c5a613e3f95b10c9866e6748f532b4242cd5a84ae70256483159571c6f92f5cb37e8e10794e52edb96b1006c58d7f052121560c3f4ec4de60a888f9f79d65d1ca8e595979d9f11246800c0131d949d911f54a6d4ae3ce41b586a00138ce174a9fc6c7edf383c2ed61c3ca7d3a7463fd11faf6a9a9c96c5bd5b35c8a6e2a8a7bae8d6880e5e9b52d5eef780").unwrap();
-            OutputProof(proof_bytes.to_array().unwrap())
-                .verify(
-                    &OUTPUT_PROOF_VERIFICATION_KEY,
-                    OutputProofPublic {
-                        balance_commitment: BalanceCommitment(
-                            HexBinary::from_hex(
-                                "5e6bb5f7916d40312e5467df3614be78151fec8fc592aa75916411d37fdd0d05",
-                            )
-                            .unwrap()
-                            .to_array::<32>()
-                            .unwrap()
-                            .try_into()
-                            .unwrap(),
-                        ),
-                        note_commitment: StateCommitment::parse_hex(
-                            "d97ebb8abcab7b3c702969222a5c59aab6f921588dcb41fb992af55f61363101",
-                        )
-                        .unwrap(),
-                    },
-                )
-                .unwrap();
-            Ok(Response::new())
+        ExecuteMsg::PenumbraShieldedGraph {
+            proof,
+            public_inputs,
+        } => {
+            let vk = VerifyingKey::deserialize_uncompressed_unchecked(OUTPUT_PROOF_VERIFYING_KEY)
+                .expect("can deserialize VerifyingKey");
+            let verified = verify(proof.to_array()?, public_inputs.as_slice(), &vk.into())?;
+            Ok(Response::new().add_attribute(
+                "verification",
+                if verified { "execute" } else { "unverified" },
+            ))
         }
     }
 }
