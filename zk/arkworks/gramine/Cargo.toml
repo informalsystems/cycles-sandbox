@@ -1,0 +1,25 @@
+[package]
+version = "0.1.0"
+name = "arkwork-gramine"
+edition = "2021"
+
+[dependencies]
+ark-ff                           = { version = "0.4.0", default-features = false }
+ark-groth16                      = { version = "0.4.0", default-features = false }
+ark-serialize                    = { version = "0.4.0", default-features = false, features = ["derive"] }
+decaf377                         = { version = "0.10.1", default-features = true }
+decaf377-rdsa                    = { version = "0.11.0", default-features = false }
+hex                              = { version = "0.4.3", default-features = false }
+penumbra-asset                   = { version = "0.80.9", default-features = true }
+penumbra-keys                    = { version = "0.80.9", default-features = true }
+penumbra-proof-params            = { version = "0.80.9", default-features = false }
+penumbra-proto                   = { version = "0.80.9", default-features = false }
+penumbra-shielded-pool           = { version = "0.80.9", default-features = false }
+rand_core                        = { version = "0.6.4", default-features = false }
+
+[patch.crates-io]
+penumbra-asset                   = { git = "https://github.com/penumbra-zone/penumbra.git" }
+penumbra-keys                    = { git = "https://github.com/penumbra-zone/penumbra.git" }
+penumbra-proof-params            = { git = "https://github.com/penumbra-zone/penumbra.git" }
+penumbra-proto                   = { git = "https://github.com/penumbra-zone/penumbra.git" }
+penumbra-shielded-pool           = { git = "https://github.com/penumbra-zone/penumbra.git" }
