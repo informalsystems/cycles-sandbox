@@ -1,17 +1,17 @@
 #[cfg(not(feature = "library"))]
 use cosmwasm_std::entry_point;
-use cosmwasm_std::{Binary, Deps, DepsMut, Env, MessageInfo, Response, StdResult};
+use cosmwasm_std::{Binary, Deps, DepsMut, Env, HexBinary, MessageInfo, Response, StdResult};
 use cw2::set_contract_version;
+
+use crate::error::{ContractError, Groth16VerificationError};
+use crate::msg::{ExecuteMsg, InstantiateMsg, QueryMsg};
+use crate::state::{State, STATE};
 
 use ark_groth16::r1cs_to_qap::LibsnarkReduction;
 use ark_groth16::{Groth16, PreparedVerifyingKey, Proof, VerifyingKey};
 use ark_serialize::CanonicalDeserialize;
 use ark_snark::SNARK;
 use decaf377::{Bls12_377, Fq};
-
-use crate::error::{ContractError, Groth16VerificationError};
-use crate::msg::{ExecuteMsg, InstantiateMsg, QueryMsg};
-use crate::state::{State, STATE};
 
 // version info for migration info
 const CONTRACT_NAME: &str = "crates.io:zk-cw";
@@ -76,6 +76,30 @@ pub fn execute(
             Ok(Response::new()
                 .add_attribute("verification", if verified { "passed" } else { "failed" }))
         }
+        ExecuteMsg::TestDecaf377Rdsa {} => {
+            use decaf377_rdsa::*;
+
+            let sk = SigningKey::<SpendAuth>::try_from(
+                HexBinary::from_hex(
+                    "4f75b1d5d7eefae2e606de2b4daa25d5dd2e3f54f3bed7d34a27b88cbd1d7b00",
+                )
+                .unwrap()
+                .to_array::<32>()
+                .unwrap(),
+            )
+            .unwrap();
+            let sig_bytes = HexBinary::from_hex("a8aa8a85a1deb25d4836e153520535e123069b01fe056f327ac8fb98da91f00dc8847101bb5c820fea5a0777ba4528f2d7b860fef7a89bfd8e4152ae83935003").unwrap().to_array::<64>().unwrap();
+            let pk_bytes: [u8; 32] = VerificationKey::from(&sk).into();
+
+            // Deserialize and verify the signature.
+            let msg = b"Hello!";
+            let sig: Signature<SpendAuth> = sig_bytes.into();
+            assert!(VerificationKey::try_from(pk_bytes)
+                .and_then(|pk| pk.verify(msg, &sig))
+                .is_ok());
+
+            Ok(Response::new())
+        }
     }
 }
 
@@ -95,6 +119,40 @@ mod tests {
         let public_inputs = HexBinary::from_hex("02000000000000006502c5281a48ea6499dfdd0b1e2571be402556d07195fa5429845d14e91632057ad10727b3d29e1c273348f53bd6b4d83a59d89ee0a8eebfb4432423afe05206").unwrap();
         let verified = verify(proof.to_array().unwrap(), public_inputs.as_slice(), &vk).unwrap();
         assert!(verified);
+    }
+
+    #[test]
+    fn test_signature_verification() {
+        use decaf377_rdsa::*;
+        // use rand::thread_rng;
+        //
+        let msg = b"Hello!";
+        //
+        // // Generate a secret key and sign the message
+        // let sk = SigningKey::<SpendAuth>::new(thread_rng());
+        // println!("{}", HexBinary::from(&sk.to_bytes()));
+        //
+        // let sig = sk.sign(thread_rng(), msg);
+        //
+        // // Types can be converted to raw byte arrays using From/Into
+        // let sig_bytes: [u8; 64] = sig.into();
+        // println!("{}", HexBinary::from(&sig_bytes));
+
+        let sk = SigningKey::<SpendAuth>::try_from(
+            HexBinary::from_hex("4f75b1d5d7eefae2e606de2b4daa25d5dd2e3f54f3bed7d34a27b88cbd1d7b00")
+                .unwrap()
+                .to_array::<32>()
+                .unwrap(),
+        )
+        .unwrap();
+        let sig_bytes = HexBinary::from_hex("a8aa8a85a1deb25d4836e153520535e123069b01fe056f327ac8fb98da91f00dc8847101bb5c820fea5a0777ba4528f2d7b860fef7a89bfd8e4152ae83935003").unwrap().to_array::<64>().unwrap();
+        let pk_bytes: [u8; 32] = VerificationKey::from(&sk).into();
+
+        // Deserialize and verify the signature.
+        let sig: Signature<SpendAuth> = sig_bytes.into();
+        assert!(VerificationKey::try_from(pk_bytes)
+            .and_then(|pk| pk.verify(msg, &sig))
+            .is_ok());
     }
 }
 

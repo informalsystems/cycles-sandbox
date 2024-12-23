@@ -42,21 +42,15 @@ cosmwasm-std = { version = "2.1.0", default-features = false, features = [
 cw-storage-plus = { default-features = false, version = "2.0.0" }
 cw2 = { default-features = false, version = "2.0.0" }
 
-#penumbra-shielded-graph = { default-features = false, path = "../../../penumbra/crates/core/component/shielded-graph" }
-#penumbra-proof-params = { default-features = false, path = "../../../penumbra/crates/crypto/proof-params" }
-#penumbra-asset = { default-features = false, path = "../../../penumbra/crates/core/asset" }
-
 ark-serialize = { version = "0.4.0", default-features = false }
 ark-groth16 = { version = "0.4.0", default-features = false }
 ark-snark = { version = "0.4.0", default-features = false }
 ark-relations = { version = "0.4.0", default-features = false }
-#ark-bls12-377 = { version = "0.4.0", default-features = false, features = ["curve"] }
-#ark-ed-on-bls12-377 = { version = "0.4.0", default-features = false }
 decaf377 = { version = "0.10.1", default-features = false, features = ["arkworks"] }
-
-getrandom = { version = "0.2.15", features = ["js"] }
+decaf377-rdsa = { version = "0.11.0", default-features = false }
 
 [dev-dependencies]
 
 [patch.crates-io]
 decaf377 = { git = "https://github.com/hu55a1n1/decaf377.git" }
+#decaf377-rdsa = { git = "https://github.com/hu55a1n1/decaf377-rdsa.git" }

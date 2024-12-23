@@ -10,6 +10,7 @@ pub enum ExecuteMsg {
         proof: HexBinary,
         public_inputs: HexBinary,
     },
+    TestDecaf377Rdsa {},
 }
 
 #[cw_serde]
