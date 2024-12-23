@@ -11,6 +11,7 @@ pub enum ExecuteMsg {
         public_inputs: HexBinary,
     },
     TestDecaf377Rdsa {},
+    TestPoseidon377 {},
 }
 
 #[cw_serde]

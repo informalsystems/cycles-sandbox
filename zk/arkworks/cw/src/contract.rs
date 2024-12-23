@@ -100,6 +100,28 @@ pub fn execute(
 
             Ok(Response::new())
         }
+        ExecuteMsg::TestPoseidon377 {} => {
+            use core::str::FromStr;
+
+            use poseidon377::*;
+
+            let domain_sep = Fq::from_le_bytes_mod_order(b"Penumbra_TestVec");
+
+            let input = Fq::from_str(
+                "7553885614632219548127688026174585776320152166623257619763178041781456016062",
+            )
+            .unwrap();
+            let output = hash_1(&domain_sep, input);
+
+            let expected_output = Fq::from_str(
+                "2337838243217876174544784248400816541933405738836087430664765452605435675740",
+            )
+            .unwrap();
+
+            assert_eq!(output, expected_output);
+
+            Ok(Response::new())
+        }
     }
 }
 

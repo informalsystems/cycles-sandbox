@@ -48,6 +48,7 @@ ark-snark = { version = "0.4.0", default-features = false }
 ark-relations = { version = "0.4.0", default-features = false }
 decaf377 = { version = "0.10.1", default-features = false, features = ["arkworks"] }
 decaf377-rdsa = { version = "0.11.0", default-features = false }
+poseidon377 = { version = "1.2.0", default-features = false }
 
 [dev-dependencies]
 
