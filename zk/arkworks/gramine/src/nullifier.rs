@@ -1,13 +1,11 @@
 use ark_r1cs_std::prelude::*;
 use ark_relations::r1cs::SynthesisError;
 use decaf377::{r1cs::FqVar, Fq};
-use penumbra_tct as tct;
-use penumbra_tct::{r1cs::StateCommitmentVar, StateCommitment};
-use poseidon377::hash_3;
-
 use once_cell::sync::Lazy;
-use penumbra_keys::keys::{NullifierKey, NullifierKeyVar};
 use penumbra_proto::{core::component::sct::v1 as pb, DomainType};
+use penumbra_shielded_pool::note::NoteVar;
+use penumbra_shielded_pool::Note;
+use poseidon377::hash_6;
 use serde::{Deserialize, Serialize};
 
 #[derive(PartialEq, Eq, Clone, Copy, Hash, PartialOrd, Ord, Serialize, Deserialize)]
@@ -66,14 +64,17 @@ impl Nullifier {
 
     /// Derive the [`Nullifier`] for a positioned note or swap given its [`merkle::Position`]
     /// and [`Commitment`].
-    pub fn derive(
-        nk: &NullifierKey,
-        pos: penumbra_tct::Position,
-        state_commitment: &StateCommitment,
-    ) -> Nullifier {
-        Nullifier(hash_3(
+    pub fn derive(note: &Note) -> Nullifier {
+        Nullifier(hash_6(
             &NULLIFIER_DOMAIN_SEP,
-            (nk.0, state_commitment.0, (u64::from(pos)).into()),
+            (
+                note.note_blinding(),
+                note.value().amount.into(),
+                note.value().asset_id.0,
+                note.diversified_generator().vartime_compress_to_field(),
+                note.transmission_key_s(),
+                Fq::from_le_bytes_mod_order(&note.clue_key().0[..]),
+            ),
         ))
     }
 }
@@ -144,20 +145,21 @@ impl EqGadget<Fq> for NullifierVar {
 }
 
 impl NullifierVar {
-    pub fn derive(
-        nk: &NullifierKeyVar,
-        position: &tct::r1cs::PositionVar,
-        state_commitment: &StateCommitmentVar,
-    ) -> Result<NullifierVar, SynthesisError> {
-        let cs = state_commitment.inner.cs();
+    pub fn derive(note: &NoteVar) -> Result<NullifierVar, SynthesisError> {
+        let cs = note.amount().cs();
         let domain_sep = FqVar::new_constant(cs.clone(), *NULLIFIER_DOMAIN_SEP)?;
-        let nullifier = poseidon377::r1cs::hash_3(
+        let compressed_g_d = note.address.diversified_generator().compress_to_field()?;
+
+        let nullifier = poseidon377::r1cs::hash_6(
             cs,
             &domain_sep,
             (
-                nk.inner.clone(),
-                state_commitment.inner.clone(),
-                position.position.clone(),
+                note.note_blinding.clone(),
+                note.value.amount(),
+                note.value.asset_id(),
+                compressed_g_d,
+                note.address.transmission_key().compress_to_field()?,
+                note.address.clue_key(),
             ),
         )?;
 
