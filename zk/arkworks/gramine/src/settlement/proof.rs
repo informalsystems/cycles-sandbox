@@ -24,15 +24,15 @@ use penumbra_shielded_pool::{note, Note, Rseed};
 /// The public input for an [`SettlementProof`].
 #[derive(Clone, Debug)]
 pub struct SettlementProofPublic {
-    /// A hiding commitment to the note.
-    pub note_commitment: note::StateCommitment,
+    /// A hiding commitment to output notes.
+    pub output_notes_commitments: Vec<note::StateCommitment>,
 }
 
 /// The private input for an [`SettlementProof`].
 #[derive(Clone, Debug)]
 pub struct SettlementProofPrivate {
-    /// The note being created.
-    pub note: Note,
+    /// The output notes being created.
+    pub output_notes: Vec<Note>,
 }
 
 #[cfg(test)]
@@ -40,13 +40,18 @@ fn check_satisfaction(
     public: &SettlementProofPublic,
     private: &SettlementProofPrivate,
 ) -> Result<()> {
-    if private.note.diversified_generator() == decaf377::Element::default() {
-        anyhow::bail!("diversified generator is identity");
-    }
+    for (note_commitment, note) in public
+        .output_notes_commitments
+        .iter()
+        .zip(private.output_notes.iter())
+    {
+        if note.diversified_generator() == decaf377::Element::default() {
+            anyhow::bail!("diversified generator is identity");
+        }
 
-    let note_commitment = private.note.commit();
-    if note_commitment != public.note_commitment {
-        anyhow::bail!("note commitment did not match public input");
+        if note_commitment != &note.commit() {
+            anyhow::bail!("note commitment did not match public input");
+        }
     }
 
     Ok(())
@@ -72,14 +77,6 @@ fn check_circuit_satisfaction(
     Ok(())
 }
 
-/// Public:
-/// * ncm (note commitment)
-///
-/// Witnesses:
-/// * g_d (point)
-/// * pk_d (point)
-/// * v (u128 value plus asset ID (scalar))
-/// * nblind (Fq)
 #[derive(Clone, Debug)]
 pub struct SettlementCircuit {
     public: SettlementProofPublic,
@@ -94,17 +91,24 @@ impl SettlementCircuit {
 
 impl ConstraintSynthesizer<Fq> for SettlementCircuit {
     fn generate_constraints(self, cs: ConstraintSystemRef<Fq>) -> ark_relations::r1cs::Result<()> {
-        // Witnesses
-        // Note: In the allocation of the address on `NoteVar`, we check the diversified base is not identity.
-        let note_var = note::NoteVar::new_witness(cs.clone(), || Ok(self.private.note.clone()))?;
+        for (note_commitment, note) in self
+            .public
+            .output_notes_commitments
+            .iter()
+            .zip(self.private.output_notes.iter())
+        {
+            // Witnesses
+            // Note: In the allocation of the address on `NoteVar`, we check the diversified base is not identity.
+            let note_var = note::NoteVar::new_witness(cs.clone(), || Ok(note.clone()))?;
 
-        // Public inputs
-        let claimed_note_commitment =
-            StateCommitmentVar::new_input(cs.clone(), || Ok(self.public.note_commitment))?;
+            // Public inputs
+            let claimed_note_commitment =
+                StateCommitmentVar::new_input(cs.clone(), || Ok(note_commitment))?;
 
-        // Note commitment integrity
-        let note_commitment = note_var.commit()?;
-        note_commitment.enforce_equal(&claimed_note_commitment)?;
+            // Note commitment integrity
+            let note_commitment = note_var.commit()?;
+            note_commitment.enforce_equal(&claimed_note_commitment)?;
+        }
 
         Ok(())
     }
@@ -130,9 +134,11 @@ impl DummyWitness for SettlementCircuit {
         .expect("can make a note");
 
         let public = SettlementProofPublic {
-            note_commitment: note.commit(),
+            output_notes_commitments: vec![note.commit()],
         };
-        let private = SettlementProofPrivate { note };
+        let private = SettlementProofPrivate {
+            output_notes: vec![note],
+        };
         SettlementCircuit { public, private }
     }
 }
@@ -176,13 +182,16 @@ impl SettlementProof {
         let proof =
             Proof::deserialize_compressed_unchecked(&self.0[..]).map_err(|e| anyhow::anyhow!(e))?;
 
-        let mut public_inputs = Vec::new();
+        let mut public_inputs: Vec<Fq> = Vec::new();
         public_inputs.extend(
             public
-                .note_commitment
-                .0
-                .to_field_elements()
-                .ok_or_else(|| anyhow::anyhow!("note commitment is not a valid field element"))?,
+                .output_notes_commitments
+                .into_iter()
+                .map(|c| c.0.to_field_elements())
+                .collect::<Option<Vec<_>>>()
+                .ok_or_else(|| anyhow::anyhow!("note commitment is not a valid field element"))?
+                .iter()
+                .flatten(),
         );
 
         tracing::trace!(?public_inputs);
@@ -256,8 +265,8 @@ mod tests {
             ).expect("should be able to create note");
             let note_commitment = note.commit();
 
-            let public = SettlementProofPublic { note_commitment };
-            let private = SettlementProofPrivate { note };
+            let public = SettlementProofPublic { output_notes_commitments: vec![note_commitment] };
+            let private = SettlementProofPrivate { output_notes: vec![note] };
 
             (public, private)
         }
@@ -299,8 +308,8 @@ mod tests {
                 note.clue_key(),
             );
 
-            let bad_public = SettlementProofPublic { note_commitment: incorrect_note_commitment };
-            let private = SettlementProofPrivate { note };
+            let bad_public = SettlementProofPublic { output_notes_commitments: vec![incorrect_note_commitment] };
+            let private = SettlementProofPrivate { output_notes: vec![note] };
 
             (bad_public, private)
         }
