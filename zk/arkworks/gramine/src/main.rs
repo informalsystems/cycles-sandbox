@@ -47,6 +47,7 @@ mod proof_bundle {
     }
 }
 
+pub mod nullifier;
 pub mod output;
 pub mod settlement;
 

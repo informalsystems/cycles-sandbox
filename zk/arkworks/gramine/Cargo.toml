@@ -20,11 +20,16 @@ penumbra-keys                    = { version = "0.80.9", default-features = true
 penumbra-proof-params            = { version = "0.80.9", default-features = false }
 penumbra-proto                   = { version = "0.80.9", default-features = false }
 penumbra-shielded-pool           = { version = "0.80.9", default-features = false }
+penumbra-sct                     = { version = "0.80.9", default-features = false }
 penumbra-tct                     = { version = "0.80.9", default-features = false }
+poseidon377                      = { version = "1.2.0", default-features = false }
 rand_core                        = { version = "0.6.4", default-features = false }
 base64                           = { version = "0.21.7", default-features = false }
 anyhow                           = { version = "1.0.94", default-features = false }
 tracing                          = { version = "0.1.41", default-features = false }
+once_cell                        = { version = "1.20.2", default-features = false }
+serde                            = { version = "1.0.216", features = ["derive"], default-features = false }
+blake2b_simd                     = { version = "1.0.2", default-features = false }
 
 [dev-dependencies]
 proptest                         = { version = "1" }
@@ -39,4 +44,5 @@ penumbra-num                     = { git = "https://github.com/penumbra-zone/pen
 penumbra-proof-params            = { git = "https://github.com/penumbra-zone/penumbra.git" }
 penumbra-proto                   = { git = "https://github.com/penumbra-zone/penumbra.git" }
 penumbra-shielded-pool           = { git = "https://github.com/penumbra-zone/penumbra.git" }
+penumbra-sct                     = { git = "https://github.com/penumbra-zone/penumbra.git" }
 penumbra-tct                     = { git = "https://github.com/penumbra-zone/penumbra.git" }
