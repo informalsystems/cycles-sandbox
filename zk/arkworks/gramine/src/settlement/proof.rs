@@ -2,30 +2,32 @@ use base64::prelude::*;
 use std::str::FromStr;
 
 use anyhow::Result;
-use ark_groth16::r1cs_to_qap::LibsnarkReduction;
-use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
-use decaf377::{Bls12_377, Fq};
-use decaf377_fmd as fmd;
-use decaf377_ka as ka;
-
 use ark_ff::ToConstraintField;
+use ark_groth16::r1cs_to_qap::LibsnarkReduction;
 use ark_groth16::{Groth16, PreparedVerifyingKey, Proof, ProvingKey};
 use ark_r1cs_std::prelude::*;
 use ark_relations::r1cs::{ConstraintSynthesizer, ConstraintSystemRef};
+use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_snark::SNARK;
+use decaf377::{Bls12_377, Fq};
+use decaf377_fmd as fmd;
+use decaf377_ka as ka;
+use penumbra_asset::Value;
 use penumbra_keys::{keys::Diversifier, Address};
+use penumbra_proof_params::{DummyWitness, VerifyingKeyExt, GROTH16_PROOF_LENGTH_BYTES};
 use penumbra_proto::{penumbra::core::component::shielded_pool::v1 as pb, DomainType};
+use penumbra_shielded_pool::{note, Note, Rseed};
 use penumbra_tct::r1cs::StateCommitmentVar;
 
-use penumbra_asset::Value;
-use penumbra_proof_params::{DummyWitness, VerifyingKeyExt, GROTH16_PROOF_LENGTH_BYTES};
-use penumbra_shielded_pool::{note, Note, Rseed};
+use crate::nullifier::{Nullifier, NullifierVar};
 
 /// The public input for an [`SettlementProof`].
 #[derive(Clone, Debug)]
 pub struct SettlementProofPublic {
     /// A hiding commitment to output notes.
     pub output_notes_commitments: Vec<note::StateCommitment>,
+    /// Nullifiers for input notes.
+    pub nullifiers: Vec<Nullifier>,
 }
 
 /// The private input for an [`SettlementProof`].
@@ -33,6 +35,8 @@ pub struct SettlementProofPublic {
 pub struct SettlementProofPrivate {
     /// The output notes being created.
     pub output_notes: Vec<Note>,
+    /// The input notes being spent.
+    pub input_notes: Vec<Note>,
 }
 
 #[cfg(test)]
@@ -51,6 +55,12 @@ fn check_satisfaction(
 
         if note_commitment != &note.commit() {
             anyhow::bail!("note commitment did not match public input");
+        }
+    }
+
+    for (nullifier, note) in public.nullifiers.iter().zip(private.input_notes.iter()) {
+        if nullifier != &Nullifier::derive(note) {
+            anyhow::bail!("nullifier did not match public input");
         }
     }
 
@@ -110,6 +120,23 @@ impl ConstraintSynthesizer<Fq> for SettlementCircuit {
             note_commitment.enforce_equal(&claimed_note_commitment)?;
         }
 
+        for (nullifier, note) in self
+            .public
+            .nullifiers
+            .iter()
+            .zip(self.private.input_notes.iter())
+        {
+            // Witnesses
+            // Note: In the allocation of the address on `NoteVar`, we check the diversified base is not identity.
+            let note_var = note::NoteVar::new_witness(cs.clone(), || Ok(note.clone()))?;
+
+            // Public inputs
+            let claimed_nullifier_var = NullifierVar::new_input(cs.clone(), || Ok(nullifier))?;
+
+            let nullifier_var = NullifierVar::derive(&note_var)?;
+            nullifier_var.enforce_equal(&claimed_nullifier_var)?;
+        }
+
         Ok(())
     }
 }
@@ -135,9 +162,11 @@ impl DummyWitness for SettlementCircuit {
 
         let public = SettlementProofPublic {
             output_notes_commitments: vec![note.commit()],
+            nullifiers: vec![Nullifier::derive(&note)],
         };
         let private = SettlementProofPrivate {
-            output_notes: vec![note],
+            output_notes: vec![note.clone()],
+            input_notes: vec![note],
         };
         SettlementCircuit { public, private }
     }
@@ -190,6 +219,16 @@ impl SettlementProof {
                 .map(|c| c.0.to_field_elements())
                 .collect::<Option<Vec<_>>>()
                 .ok_or_else(|| anyhow::anyhow!("note commitment is not a valid field element"))?
+                .iter()
+                .flatten(),
+        );
+        public_inputs.extend(
+            public
+                .nullifiers
+                .into_iter()
+                .map(|c| c.0.to_field_elements())
+                .collect::<Option<Vec<_>>>()
+                .ok_or_else(|| anyhow::anyhow!("nullifier is not a valid field element"))?
                 .iter()
                 .flatten(),
         );
@@ -258,15 +297,26 @@ mod tests {
                 amount: Amount::from(amount),
                 asset_id: asset::Id(Fq::from(asset_id64)),
             };
-            let note = Note::from_parts(
-                dest,
+            let input_note = Note::from_parts(
+                dest.clone(),
                 value_to_send,
                 Rseed(rseed_randomness),
             ).expect("should be able to create note");
-            let note_commitment = note.commit();
+            let input_note_nullifier = Nullifier::derive(&input_note);
 
-            let public = SettlementProofPublic { output_notes_commitments: vec![note_commitment] };
-            let private = SettlementProofPrivate { output_notes: vec![note] };
+            let value_reduced = Value {
+                amount: Amount::from(amount/2),
+                asset_id: asset::Id(Fq::from(asset_id64)),
+            };
+            let output_note = Note::from_parts(
+                dest,
+                value_reduced,
+                Rseed(rseed_randomness),
+            ).expect("should be able to create note");
+            let output_note_commitment = output_note.commit();
+
+            let public = SettlementProofPublic { output_notes_commitments: vec![output_note_commitment], nullifiers: vec![input_note_nullifier]};
+            let private = SettlementProofPrivate { output_notes: vec![output_note], input_notes: vec![input_note]};
 
             (public, private)
         }
@@ -308,8 +358,8 @@ mod tests {
                 note.clue_key(),
             );
 
-            let bad_public = SettlementProofPublic { output_notes_commitments: vec![incorrect_note_commitment] };
-            let private = SettlementProofPrivate { output_notes: vec![note] };
+            let bad_public = SettlementProofPublic { output_notes_commitments: vec![incorrect_note_commitment], nullifiers: vec![]};
+            let private = SettlementProofPrivate { output_notes: vec![note], input_notes: vec![]};
 
             (bad_public, private)
         }
