@@ -48,6 +48,7 @@ mod proof_bundle {
 }
 
 pub mod output;
+pub mod settlement;
 
 fn main() {
     let pk = ProvingKey::deserialize_uncompressed_unchecked(OUTPUT_PROOF_PROVING_KEY)
