@@ -21,6 +21,7 @@ once_cell                        = { version = "1.20.2", default-features = fals
 penumbra-asset                   = { version = "0.80.9", default-features = true }
 penumbra-keys                    = { version = "0.80.9", default-features = true }
 penumbra-proof-params            = { version = "0.80.9", default-features = false }
+penumbra-num                     = { version = "0.80.9", default-features = false }
 penumbra-proto                   = { version = "0.80.9", default-features = false }
 penumbra-shielded-pool           = { version = "0.80.9", default-features = false }
 penumbra-tct                     = { version = "0.80.9", default-features = false }

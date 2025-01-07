@@ -1,4 +1,4 @@
-use base64::prelude::*;
+use std::cmp::Ordering;
 use std::str::FromStr;
 
 use anyhow::Result;
@@ -6,14 +6,16 @@ use ark_ff::ToConstraintField;
 use ark_groth16::r1cs_to_qap::LibsnarkReduction;
 use ark_groth16::{Groth16, PreparedVerifyingKey, Proof, ProvingKey};
 use ark_r1cs_std::prelude::*;
-use ark_relations::r1cs::{ConstraintSynthesizer, ConstraintSystemRef};
+use ark_relations::r1cs::{ConstraintSynthesizer, ConstraintSystemRef, SynthesisError};
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_snark::SNARK;
+use base64::prelude::*;
 use decaf377::{Bls12_377, Fq};
 use decaf377_fmd as fmd;
 use decaf377_ka as ka;
-use penumbra_asset::Value;
+use penumbra_asset::{Value, ValueVar};
 use penumbra_keys::{keys::Diversifier, Address};
+use penumbra_num::{Amount, AmountVar};
 use penumbra_proof_params::{DummyWitness, VerifyingKeyExt, GROTH16_PROOF_LENGTH_BYTES};
 use penumbra_proto::{penumbra::core::component::shielded_pool::v1 as pb, DomainType};
 use penumbra_shielded_pool::{note, Note, Rseed};
@@ -37,6 +39,8 @@ pub struct SettlementProofPrivate {
     pub output_notes: Vec<Note>,
     /// The input notes being spent.
     pub input_notes: Vec<Note>,
+    /// Setoff amount for this cycle.
+    pub setoff_amount: Amount,
 }
 
 #[cfg(test)]
@@ -63,6 +67,35 @@ fn check_satisfaction(
             anyhow::bail!("nullifier did not match public input");
         }
     }
+
+    anyhow::ensure!(
+        private.setoff_amount > Amount::zero(),
+        "non-positive setoff amount"
+    );
+
+    for input_note in &private.input_notes {
+        anyhow::ensure!(
+            input_note.amount() >= private.setoff_amount,
+            "note amount is less than setoff amount"
+        );
+    }
+
+    let mut expected_output_notes = vec![];
+    for note in &private.input_notes {
+        let note = {
+            let remainder = note.amount() - private.setoff_amount;
+            let new_value = Value {
+                amount: remainder,
+                asset_id: note.asset_id(),
+            };
+            Note::from_parts(note.address(), new_value, note.rseed())?
+        };
+        expected_output_notes.push(note.commit());
+    }
+    anyhow::ensure!(
+        expected_output_notes >= public.output_notes_commitments,
+        "expected output notes do not match claimed"
+    );
 
     Ok(())
 }
@@ -137,6 +170,57 @@ impl ConstraintSynthesizer<Fq> for SettlementCircuit {
             nullifier_var.enforce_equal(&claimed_nullifier_var)?;
         }
 
+        // let address_var = |n: &Note| AddressVar::new_witness(cs.clone(), || Ok(n.address()));
+        // for notes in self.private.input_notes.windows(2) {
+        //     let curr = address_var(&notes[0])?;
+        //     let next = address_var(&notes[1])?;
+        //     curr.enforce_equal(&next)?;
+        // }
+        // let first = self.private.input_notes.first().map(address_var).ok_or_else(||SynthesisError::Unsatisfiable)??;
+        // let last = self.private.input_notes.last().map(address_var).ok_or_else(||SynthesisError::Unsatisfiable)??;
+        // first.enforce_equal(&last)?;
+
+        // Do we need to check there are >1 input notes?
+
+        // setoff_amount > 0
+        let value_var = |n: &Note| ValueVar::new_witness(cs.clone(), || Ok(n.value()));
+        let setoff_var = AmountVar::new_witness(cs.clone(), || Ok(self.private.setoff_amount))?;
+        let zero_var = AmountVar::new_witness(cs.clone(), || Ok(Amount::zero()))?;
+        setoff_var
+            .amount
+            .enforce_cmp(&zero_var.amount, Ordering::Greater, false)?;
+
+        // min_amount >= setoff_amount
+        for note in &self.private.input_notes {
+            let value_var = value_var(note)?;
+            value_var
+                .amount
+                .amount
+                .enforce_cmp(&setoff_var.amount, Ordering::Greater, true)?
+        }
+
+        let mut expected_output_notes = vec![];
+        for note in self.private.input_notes {
+            let note_var = {
+                let remainder = note.amount() - self.private.setoff_amount;
+                let new_value = Value {
+                    amount: remainder,
+                    asset_id: note.asset_id(),
+                };
+                let note = Note::from_parts(note.address(), new_value, note.rseed())
+                    .map_err(|_| SynthesisError::Unsatisfiable)?;
+                note::NoteVar::new_witness(cs.clone(), || Ok(note.clone()))?
+            };
+            expected_output_notes.push(note_var.commit()?);
+        }
+        for (expected, claimed) in expected_output_notes
+            .iter()
+            .zip(self.public.output_notes_commitments.iter())
+        {
+            let claimed = StateCommitmentVar::new_input(cs.clone(), || Ok(claimed))?;
+            expected.enforce_equal(&claimed)?;
+        }
+
         Ok(())
     }
 }
@@ -167,6 +251,7 @@ impl DummyWitness for SettlementCircuit {
         let private = SettlementProofPrivate {
             output_notes: vec![note.clone()],
             input_notes: vec![note],
+            setoff_amount: Amount::zero(),
         };
         SettlementCircuit { public, private }
     }
@@ -286,7 +371,7 @@ mod tests {
     }
 
     prop_compose! {
-        fn arb_valid_settlement_statement()(seed_phrase_randomness in any::<[u8; 32]>(), rseed_randomness in any::<[u8; 32]>(), amount in any::<u64>(), asset_id64 in any::<u64>(), address_index in any::<u32>()) -> (SettlementProofPublic, SettlementProofPrivate) {
+        fn arb_valid_settlement_statement()(seed_phrase_randomness in any::<[u8; 32]>(), rseed_randomness in any::<[u8; 32]>(), amount in 2u64.., asset_id64 in any::<u64>(), address_index in any::<u32>()) -> (SettlementProofPublic, SettlementProofPrivate) {
             let seed_phrase = SeedPhrase::from_randomness(&seed_phrase_randomness);
             let sk_recipient = SpendKey::from_seed_phrase_bip44(seed_phrase, &Bip44Path::new(0));
             let fvk_recipient = sk_recipient.full_viewing_key();
@@ -304,8 +389,9 @@ mod tests {
             ).expect("should be able to create note");
             let input_note_nullifier = Nullifier::derive(&input_note);
 
+            let setoff_amount = amount/2;
             let value_reduced = Value {
-                amount: Amount::from(amount/2),
+                amount: Amount::from(amount - setoff_amount),
                 asset_id: asset::Id(Fq::from(asset_id64)),
             };
             let output_note = Note::from_parts(
@@ -316,7 +402,7 @@ mod tests {
             let output_note_commitment = output_note.commit();
 
             let public = SettlementProofPublic { output_notes_commitments: vec![output_note_commitment], nullifiers: vec![input_note_nullifier]};
-            let private = SettlementProofPrivate { output_notes: vec![output_note], input_notes: vec![input_note]};
+            let private = SettlementProofPrivate { output_notes: vec![output_note], input_notes: vec![input_note], setoff_amount: Amount::from(setoff_amount)};
 
             (public, private)
         }
@@ -333,7 +419,7 @@ mod tests {
     prop_compose! {
         // This strategy generates an settlement statement, but then replaces the note commitment
         // with one generated using an invalid note blinding factor.
-        fn arb_invalid_settlement_note_commitment_integrity()(seed_phrase_randomness in any::<[u8; 32]>(), rseed_randomness in any::<[u8; 32]>(), amount in any::<u64>(), asset_id64 in any::<u64>(), address_index in any::<u32>(), incorrect_note_blinding in fq_strategy()) -> (SettlementProofPublic, SettlementProofPrivate) {
+        fn arb_invalid_settlement_note_commitment_integrity()(seed_phrase_randomness in any::<[u8; 32]>(), rseed_randomness in any::<[u8; 32]>(), amount in 2u64.., asset_id64 in any::<u64>(), address_index in any::<u32>(), incorrect_note_blinding in fq_strategy()) -> (SettlementProofPublic, SettlementProofPrivate) {
             let seed_phrase = SeedPhrase::from_randomness(&seed_phrase_randomness);
             let sk_recipient = SpendKey::from_seed_phrase_bip44(seed_phrase, &Bip44Path::new(0));
             let fvk_recipient = sk_recipient.full_viewing_key();
@@ -359,7 +445,7 @@ mod tests {
             );
 
             let bad_public = SettlementProofPublic { output_notes_commitments: vec![incorrect_note_commitment], nullifiers: vec![]};
-            let private = SettlementProofPrivate { output_notes: vec![note], input_notes: vec![]};
+            let private = SettlementProofPrivate { output_notes: vec![note], input_notes: vec![], setoff_amount: Amount::zero()};
 
             (bad_public, private)
         }
