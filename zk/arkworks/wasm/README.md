@@ -55,18 +55,6 @@ You can use the provided build script:
 ./build.sh --target react-native --release
 ```
 
-Or manually with wasm-pack:
-
-```bash
-wasm-pack build --target web --out-dir pkg
-```
-
-### Testing
-
-```bash
-wasm-pack test --node
-```
-
 ## Usage
 
 ### JavaScript/TypeScript

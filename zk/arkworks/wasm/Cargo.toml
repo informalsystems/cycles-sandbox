@@ -41,11 +41,22 @@ rand_core                        = { version = "0.6.4", default-features = false
 serde                            = { version = "1.0.216", features = ["derive"], default-features = false }
 tracing                          = { version = "0.1.41", default-features = false }
 
-
 [dev-dependencies]
-proptest                         = { version = "1" }
-penumbra-num                     = { version = "0.80.9", default-features = false }
+wasm-bindgen-test = "0.3"
+getrandom = { version = "0.2", features = ["js"] }
+proptest = { version = "1", default-features = false } # Remove std features
+penumbra-num = { version = "0.80.9", default-features = false }
 
+[features]
+default = ["std"]
+std = [
+    "anyhow/std",
+    "ark-ff/std",
+    "ark-std/std",
+    "proptest/std"
+]
+
+# Keep existing patches
 [patch.crates-io]
 decaf377-fmd                     = { git = "https://github.com/penumbra-zone/penumbra.git", tag = "v0.80.9" }
 decaf377-ka                      = { git = "https://github.com/penumbra-zone/penumbra.git", tag = "v0.80.9" }
