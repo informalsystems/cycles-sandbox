@@ -45,11 +45,14 @@ zk/arkworks/wasm/
 You can use the provided build script:
 
 ```bash
-# Basic build
+# Build for web (default)
 ./build.sh
 
-# Optimized build
-./build.sh --release
+# Build for React Native
+./build.sh --target react-native
+
+# Build optimized version
+./build.sh --target react-native --release
 ```
 
 Or manually with wasm-pack:
