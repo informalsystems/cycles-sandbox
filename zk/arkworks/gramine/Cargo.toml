@@ -35,13 +35,13 @@ proptest                         = { version = "1" }
 penumbra-num                     = { version = "0.80.9", default-features = false }
 
 [patch.crates-io]
-decaf377-fmd                     = { git = "https://github.com/penumbra-zone/penumbra.git" }
-decaf377-ka                      = { git = "https://github.com/penumbra-zone/penumbra.git" }
-penumbra-asset                   = { git = "https://github.com/penumbra-zone/penumbra.git" }
-penumbra-keys                    = { git = "https://github.com/penumbra-zone/penumbra.git" }
-penumbra-num                     = { git = "https://github.com/penumbra-zone/penumbra.git" }
-penumbra-proof-params            = { git = "https://github.com/penumbra-zone/penumbra.git" }
-penumbra-proto                   = { git = "https://github.com/penumbra-zone/penumbra.git" }
-penumbra-shielded-pool           = { git = "https://github.com/penumbra-zone/penumbra.git" }
-penumbra-sct                     = { git = "https://github.com/penumbra-zone/penumbra.git" }
-penumbra-tct                     = { git = "https://github.com/penumbra-zone/penumbra.git" }
+decaf377-fmd                     = { git = "https://github.com/penumbra-zone/penumbra.git", tag = "v0.80.9" }
+decaf377-ka                      = { git = "https://github.com/penumbra-zone/penumbra.git", tag = "v0.80.9" }
+penumbra-asset                   = { git = "https://github.com/penumbra-zone/penumbra.git", tag = "v0.80.9" }
+penumbra-keys                    = { git = "https://github.com/penumbra-zone/penumbra.git", tag = "v0.80.9" }
+penumbra-num                     = { git = "https://github.com/penumbra-zone/penumbra.git", tag = "v0.80.9" }
+penumbra-proof-params            = { git = "https://github.com/penumbra-zone/penumbra.git", tag = "v0.80.9" }
+penumbra-proto                   = { git = "https://github.com/penumbra-zone/penumbra.git", tag = "v0.80.9" }
+penumbra-shielded-pool           = { git = "https://github.com/penumbra-zone/penumbra.git", tag = "v0.80.9" }
+penumbra-sct                     = { git = "https://github.com/penumbra-zone/penumbra.git", tag = "v0.80.9" }
+penumbra-tct                     = { git = "https://github.com/penumbra-zone/penumbra.git", tag = "v0.80.9" }
