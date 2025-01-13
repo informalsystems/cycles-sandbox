@@ -208,7 +208,7 @@ impl ConstraintSynthesizer<Fq> for SettlementCircuit {
                     amount: remainder,
                     asset_id: note.asset_id(),
                 };
-                let note = Note::from_parts(note.address(), new_value, note.rseed())
+                let note = Note::from_parts(note.debtor(), new_value, note.rseed())
                     .map_err(|_| SynthesisError::Unsatisfiable)?;
                 NoteVar::new_witness(cs.clone(), || Ok(note.clone()))?
             };

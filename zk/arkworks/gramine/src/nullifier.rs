@@ -148,7 +148,7 @@ impl NullifierVar {
     pub fn derive(note: &NoteVar) -> Result<NullifierVar, SynthesisError> {
         let cs = note.amount().cs();
         let domain_sep = FqVar::new_constant(cs.clone(), *NULLIFIER_DOMAIN_SEP)?;
-        let compressed_g_d = note.address.diversified_generator().compress_to_field()?;
+        let compressed_g_d = note.debtor.diversified_generator().compress_to_field()?;
 
         let nullifier = poseidon377::r1cs::hash_6(
             cs,
@@ -158,8 +158,8 @@ impl NullifierVar {
                 note.value.amount(),
                 note.value.asset_id(),
                 compressed_g_d,
-                note.address.transmission_key().compress_to_field()?,
-                note.address.clue_key(),
+                note.debtor.transmission_key().compress_to_field()?,
+                note.debtor.clue_key(),
             ),
         )?;
 

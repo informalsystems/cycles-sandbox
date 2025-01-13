@@ -23,7 +23,7 @@ pub struct Note {
     /// and note blinding factor.
     rseed: Rseed,
     /// The address controlling this note.
-    address: Address,
+    debtor: Address,
     /// The s-component of the transmission key of the destination address.
     /// We store this separately to ensure that every `Note` is constructed
     /// with a valid transmission key (the `ka::Public` does not validate
@@ -32,18 +32,18 @@ pub struct Note {
 }
 
 impl Note {
-    pub fn from_parts(address: Address, value: Value, rseed: Rseed) -> Result<Self, Error> {
+    pub fn from_parts(debtor: Address, value: Value, rseed: Rseed) -> Result<Self, Error> {
         Ok(Self {
             value,
             rseed,
-            address: address.clone(),
-            transmission_key_s: Fq::from_bytes_checked(&address.transmission_key().0)
+            debtor: debtor.clone(),
+            transmission_key_s: Fq::from_bytes_checked(&debtor.transmission_key().0)
                 .map_err(|_| Error::InvalidTransmissionKey)?,
         })
     }
 
-    pub fn address(&self) -> Address {
-        self.address.clone()
+    pub fn debtor(&self) -> Address {
+        self.debtor.clone()
     }
 
     pub fn note_blinding(&self) -> Fq {
@@ -55,7 +55,7 @@ impl Note {
     }
 
     pub fn diversified_generator(&self) -> decaf377::Element {
-        self.address.diversifier().diversified_generator()
+        self.debtor.diversifier().diversified_generator()
     }
 
     pub fn transmission_key_s(&self) -> Fq {
@@ -63,7 +63,7 @@ impl Note {
     }
 
     pub fn clue_key(&self) -> &fmd::ClueKey {
-        self.address.clue_key()
+        self.debtor.clue_key()
     }
 
     pub fn commit(&self) -> StateCommitment {
@@ -72,7 +72,7 @@ impl Note {
             self.value,
             self.diversified_generator(),
             self.transmission_key_s,
-            self.address.clue_key(),
+            self.debtor.clue_key(),
         )
     }
 
@@ -93,7 +93,7 @@ impl std::fmt::Debug for Note {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Note")
             .field("value", &self.value)
-            .field("address", &self.address())
+            .field("debtor", &self.debtor())
             .field("rseed", &hex::encode(self.rseed.to_bytes()))
             .finish()
     }

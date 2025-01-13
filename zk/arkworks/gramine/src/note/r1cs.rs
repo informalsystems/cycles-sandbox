@@ -9,14 +9,13 @@ use penumbra_asset::ValueVar;
 use penumbra_keys::address::AddressVar;
 use penumbra_tct::r1cs::StateCommitmentVar;
 
-use crate::note::Note;
-
 use super::NOTECOMMIT_DOMAIN_SEP;
+use crate::note::Note;
 
 pub struct NoteVar {
     pub value: ValueVar,
     pub note_blinding: FqVar,
-    pub address: AddressVar,
+    pub debtor: AddressVar,
 }
 
 impl NoteVar {
@@ -39,16 +38,16 @@ impl NoteVar {
     }
 
     pub fn diversified_generator(&self) -> ElementVar {
-        self.address.diversified_generator.clone()
+        self.debtor.diversified_generator.clone()
     }
 
     pub fn transmission_key(&self) -> ElementVar {
-        self.address.transmission_key.clone()
+        self.debtor.transmission_key.clone()
     }
 
     #[allow(dead_code)]
     pub fn clue_key(&self) -> FqVar {
-        self.address.clue_key.clone()
+        self.debtor.clue_key.clone()
     }
 }
 
@@ -65,12 +64,12 @@ impl AllocVar<Note, Fq> for NoteVar {
         let note: &Note = note1.borrow();
         let note_blinding = FqVar::new_variable(cs.clone(), || Ok(note.note_blinding()), mode)?;
         let value = ValueVar::new_variable(cs.clone(), || Ok(note.value()), mode)?;
-        let address = AddressVar::new_variable(cs, || Ok(note.address()), mode)?;
+        let debtor = AddressVar::new_variable(cs, || Ok(note.debtor()), mode)?;
 
         Ok(Self {
             note_blinding,
             value,
-            address,
+            debtor,
         })
     }
 }
@@ -81,7 +80,7 @@ impl ToConstraintField<Fq> for Note {
         let note_blinding = self.note_blinding();
         elements.extend([note_blinding]);
         elements.extend(self.value().to_field_elements()?);
-        elements.extend(self.address().to_field_elements()?);
+        elements.extend(self.debtor().to_field_elements()?);
         Some(elements)
     }
 }
@@ -94,7 +93,7 @@ impl NoteVar {
     pub fn commit(&self) -> Result<StateCommitmentVar, SynthesisError> {
         let cs = self.amount().cs();
         let domain_sep = FqVar::new_constant(cs.clone(), *NOTECOMMIT_DOMAIN_SEP)?;
-        let compressed_g_d = self.address.diversified_generator().compress_to_field()?;
+        let compressed_g_d = self.debtor.diversified_generator().compress_to_field()?;
 
         let commitment = poseidon377::r1cs::hash_6(
             cs,
@@ -104,8 +103,8 @@ impl NoteVar {
                 self.value.amount(),
                 self.value.asset_id(),
                 compressed_g_d,
-                self.address.transmission_key().compress_to_field()?,
-                self.address.clue_key(),
+                self.debtor.transmission_key().compress_to_field()?,
+                self.debtor.clue_key(),
             ),
         )?;
 
