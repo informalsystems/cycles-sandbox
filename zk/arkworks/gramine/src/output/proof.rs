@@ -223,12 +223,12 @@ impl TryFrom<pb::ZkOutputProof> for OutputProof {
 mod tests {
     use super::*;
 
-    use crate::note::commitment;
+    use crate::note::{commitment, Note};
+
     use decaf377::Fq;
     use penumbra_asset::{asset, Value};
     use penumbra_keys::keys::{Bip44Path, SeedPhrase, SpendKey};
     use penumbra_num::Amount;
-    use penumbra_shielded_pool::{note, Note};
     use proptest::prelude::*;
 
     fn fq_strategy() -> BoxedStrategy<Fq> {
