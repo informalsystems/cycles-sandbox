@@ -3,10 +3,10 @@ use ark_relations::r1cs::SynthesisError;
 use decaf377::{r1cs::FqVar, Fq};
 use once_cell::sync::Lazy;
 use penumbra_proto::{core::component::sct::v1 as pb, DomainType};
-use penumbra_shielded_pool::note::NoteVar;
-use penumbra_shielded_pool::Note;
 use poseidon377::hash_6;
 use serde::{Deserialize, Serialize};
+
+use crate::note::{r1cs::NoteVar, Note};
 
 #[derive(PartialEq, Eq, Clone, Copy, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(try_from = "pb::Nullifier", into = "pb::Nullifier")]

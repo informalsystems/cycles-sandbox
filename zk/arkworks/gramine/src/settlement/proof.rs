@@ -18,9 +18,10 @@ use penumbra_keys::{keys::Diversifier, Address};
 use penumbra_num::{Amount, AmountVar};
 use penumbra_proof_params::{DummyWitness, VerifyingKeyExt, GROTH16_PROOF_LENGTH_BYTES};
 use penumbra_proto::{penumbra::core::component::shielded_pool::v1 as pb, DomainType};
-use penumbra_shielded_pool::{note, Note, Rseed};
+use penumbra_shielded_pool::{note, Rseed};
 use penumbra_tct::r1cs::StateCommitmentVar;
 
+use crate::note::{r1cs::NoteVar, Note};
 use crate::nullifier::{Nullifier, NullifierVar};
 
 /// The public input for an [`SettlementProof`].
@@ -142,7 +143,7 @@ impl ConstraintSynthesizer<Fq> for SettlementCircuit {
         {
             // Witnesses
             // Note: In the allocation of the address on `NoteVar`, we check the diversified base is not identity.
-            let note_var = note::NoteVar::new_witness(cs.clone(), || Ok(note.clone()))?;
+            let note_var = NoteVar::new_witness(cs.clone(), || Ok(note.clone()))?;
 
             // Public inputs
             let claimed_note_commitment =
@@ -161,7 +162,7 @@ impl ConstraintSynthesizer<Fq> for SettlementCircuit {
         {
             // Witnesses
             // Note: In the allocation of the address on `NoteVar`, we check the diversified base is not identity.
-            let note_var = note::NoteVar::new_witness(cs.clone(), || Ok(note.clone()))?;
+            let note_var = NoteVar::new_witness(cs.clone(), || Ok(note.clone()))?;
 
             // Public inputs
             let claimed_nullifier_var = NullifierVar::new_input(cs.clone(), || Ok(nullifier))?;
@@ -209,7 +210,7 @@ impl ConstraintSynthesizer<Fq> for SettlementCircuit {
                 };
                 let note = Note::from_parts(note.address(), new_value, note.rseed())
                     .map_err(|_| SynthesisError::Unsatisfiable)?;
-                note::NoteVar::new_witness(cs.clone(), || Ok(note.clone()))?
+                NoteVar::new_witness(cs.clone(), || Ok(note.clone()))?
             };
             expected_output_notes.push(note_var.commit()?);
         }
@@ -357,6 +358,7 @@ impl TryFrom<pb::ZkOutputProof> for SettlementProof {
 mod tests {
     use super::*;
 
+    use crate::note::commitment;
     use decaf377::Fq;
     use penumbra_asset::{asset, Value};
     use penumbra_keys::keys::{Bip44Path, SeedPhrase, SpendKey};
@@ -436,7 +438,7 @@ mod tests {
                 Rseed(rseed_randomness),
             ).expect("should be able to create note");
 
-            let incorrect_note_commitment = note::commitment(
+            let incorrect_note_commitment = commitment(
                 incorrect_note_blinding,
                 value_to_send,
                 note.diversified_generator(),

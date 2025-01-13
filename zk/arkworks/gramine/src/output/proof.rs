@@ -19,13 +19,15 @@ use penumbra_tct::r1cs::StateCommitmentVar;
 
 use penumbra_asset::Value;
 use penumbra_proof_params::{DummyWitness, VerifyingKeyExt, GROTH16_PROOF_LENGTH_BYTES};
-use penumbra_shielded_pool::{note, Note, Rseed};
+use penumbra_shielded_pool::{note::StateCommitment, Rseed};
+
+use crate::note::{r1cs::NoteVar, Note};
 
 /// The public input for an [`OutputProof`].
 #[derive(Clone, Debug)]
 pub struct OutputProofPublic {
     /// A hiding commitment to the note.
-    pub note_commitment: note::StateCommitment,
+    pub note_commitment: StateCommitment,
 }
 
 /// The private input for an [`OutputProof`].
@@ -93,7 +95,7 @@ impl ConstraintSynthesizer<Fq> for OutputCircuit {
     fn generate_constraints(self, cs: ConstraintSystemRef<Fq>) -> ark_relations::r1cs::Result<()> {
         // Witnesses
         // Note: In the allocation of the address on `NoteVar`, we check the diversified base is not identity.
-        let note_var = note::NoteVar::new_witness(cs.clone(), || Ok(self.private.note.clone()))?;
+        let note_var = NoteVar::new_witness(cs.clone(), || Ok(self.private.note.clone()))?;
 
         // Public inputs
         let claimed_note_commitment =
@@ -221,6 +223,7 @@ impl TryFrom<pb::ZkOutputProof> for OutputProof {
 mod tests {
     use super::*;
 
+    use crate::note::commitment;
     use decaf377::Fq;
     use penumbra_asset::{asset, Value};
     use penumbra_keys::keys::{Bip44Path, SeedPhrase, SpendKey};
@@ -288,7 +291,7 @@ mod tests {
                 Rseed(rseed_randomness),
             ).expect("should be able to create note");
 
-            let incorrect_note_commitment = note::commitment(
+            let incorrect_note_commitment = commitment(
                 incorrect_note_blinding,
                 value_to_send,
                 note.diversified_generator(),

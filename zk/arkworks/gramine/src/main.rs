@@ -11,6 +11,7 @@ use rand_core::OsRng;
 
 const OUTPUT_PROOF_PROVING_KEY: &[u8] = include_bytes!("../data/output_pk.bin");
 
+pub mod note;
 pub mod nullifier;
 pub mod output;
 pub mod proof_bundle;
