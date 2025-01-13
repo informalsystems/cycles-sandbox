@@ -4,11 +4,9 @@ use once_cell::sync::Lazy;
 use penumbra_asset::{asset, Value};
 use penumbra_keys::Address;
 use penumbra_num::Amount;
-use penumbra_proto::penumbra::core::component::shielded_pool::v1 as pb;
 use penumbra_shielded_pool::note::Error;
 use penumbra_shielded_pool::Rseed;
 use penumbra_tct::StateCommitment;
-use serde::{Deserialize, Serialize};
 
 pub mod r1cs;
 
@@ -17,8 +15,7 @@ pub(crate) static NOTECOMMIT_DOMAIN_SEP: Lazy<Fq> = Lazy::new(|| {
 });
 
 /// A plaintext Penumbra note.
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(into = "pb::Note", try_from = "pb::Note")]
+#[derive(Clone, PartialEq, Eq)]
 pub struct Note {
     /// The typed value recorded by this note.
     value: Value,
@@ -89,33 +86,6 @@ impl Note {
 
     pub fn rseed(&self) -> Rseed {
         self.rseed
-    }
-}
-
-impl TryFrom<pb::Note> for Note {
-    type Error = anyhow::Error;
-    fn try_from(msg: pb::Note) -> Result<Self, Self::Error> {
-        let address = msg
-            .address
-            .ok_or_else(|| anyhow::anyhow!("missing value"))?
-            .try_into()?;
-        let value = msg
-            .value
-            .ok_or_else(|| anyhow::anyhow!("missing value"))?
-            .try_into()?;
-        let rseed = Rseed(msg.rseed.as_slice().try_into()?);
-
-        Ok(Note::from_parts(address, value, rseed)?)
-    }
-}
-
-impl From<Note> for pb::Note {
-    fn from(msg: Note) -> Self {
-        pb::Note {
-            address: Some(msg.address().into()),
-            value: Some(msg.value.into()),
-            rseed: msg.rseed.to_bytes().to_vec(),
-        }
     }
 }
 
