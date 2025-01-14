@@ -14,7 +14,7 @@ use decaf377::{Bls12_377, Fq};
 use decaf377_fmd as fmd;
 use decaf377_ka as ka;
 use penumbra_asset::{Value, ValueVar};
-use penumbra_keys::{keys::Diversifier, Address};
+use penumbra_keys::{keys::Diversifier, Address, AddressVar};
 use penumbra_num::{Amount, AmountVar};
 use penumbra_proof_params::{DummyWitness, VerifyingKeyExt, GROTH16_PROOF_LENGTH_BYTES};
 use penumbra_proto::{penumbra::core::component::shielded_pool::v1 as pb, DomainType};
@@ -68,6 +68,18 @@ fn check_satisfaction(
             anyhow::bail!("nullifier did not match public input");
         }
     }
+
+    for notes in private.input_notes.windows(2) {
+        anyhow::ensure!(
+            notes[0].creditor() != notes[1].debtor(),
+            "creditor does not match debtor in settlement flow"
+        );
+    }
+    anyhow::ensure!(
+        private.input_notes.first().unwrap().debtor()
+            != private.input_notes.last().unwrap().debtor(),
+        "first debtor does not match last creditor in settlement flow"
+    );
 
     anyhow::ensure!(
         private.setoff_amount > Amount::zero(),
@@ -171,17 +183,45 @@ impl ConstraintSynthesizer<Fq> for SettlementCircuit {
             nullifier_var.enforce_equal(&claimed_nullifier_var)?;
         }
 
-        // let address_var = |n: &Note| AddressVar::new_witness(cs.clone(), || Ok(n.address()));
-        // for notes in self.private.input_notes.windows(2) {
-        //     let curr = address_var(&notes[0])?;
-        //     let next = address_var(&notes[1])?;
-        //     curr.enforce_equal(&next)?;
-        // }
-        // let first = self.private.input_notes.first().map(address_var).ok_or_else(||SynthesisError::Unsatisfiable)??;
-        // let last = self.private.input_notes.last().map(address_var).ok_or_else(||SynthesisError::Unsatisfiable)??;
-        // first.enforce_equal(&last)?;
+        fn enforce_equal_addresses(
+            addr1: AddressVar,
+            addr2: AddressVar,
+        ) -> Result<(), SynthesisError> {
+            let AddressVar {
+                diversified_generator,
+                transmission_key,
+                clue_key,
+            } = addr1;
+            addr2
+                .diversified_generator
+                .enforce_equal(&diversified_generator)?;
+            addr2.transmission_key.enforce_equal(&transmission_key)?;
+            addr2.clue_key.enforce_equal(&clue_key)?;
+            Ok(())
+        }
 
-        // Do we need to check there are >1 input notes?
+        let debtor_var = |n: &Note| AddressVar::new_witness(cs.clone(), || Ok(n.debtor()));
+        let creditor_var = |n: &Note| AddressVar::new_witness(cs.clone(), || Ok(n.creditor()));
+        for notes in self.private.input_notes.windows(2) {
+            let curr_creditor = creditor_var(&notes[0])?;
+            let next_debtor = debtor_var(&notes[1])?;
+            enforce_equal_addresses(curr_creditor, next_debtor)?;
+        }
+        let first_debtor = self
+            .private
+            .input_notes
+            .first()
+            .map(debtor_var)
+            .ok_or_else(|| SynthesisError::Unsatisfiable)??;
+        let last_creditor = self
+            .private
+            .input_notes
+            .last()
+            .map(creditor_var)
+            .ok_or_else(|| SynthesisError::Unsatisfiable)??;
+        enforce_equal_addresses(first_debtor, last_creditor)?;
+
+        // fixme: Do we need to check there are >1 input notes?
 
         // setoff_amount > 0
         let value_var = |n: &Note| ValueVar::new_witness(cs.clone(), || Ok(n.value()));
