@@ -89,7 +89,7 @@ fn check_satisfaction(
                 amount: remainder,
                 asset_id: note.asset_id(),
             };
-            Note::from_parts(note.debtor(), new_value, note.rseed())?
+            Note::from_parts(note.debtor(), note.creditor(), new_value, note.rseed())?
         };
         expected_output_notes.push(note.commit());
     }
@@ -208,8 +208,9 @@ impl ConstraintSynthesizer<Fq> for SettlementCircuit {
                     amount: remainder,
                     asset_id: note.asset_id(),
                 };
-                let note = Note::from_parts(note.debtor(), new_value, note.rseed())
-                    .map_err(|_| SynthesisError::Unsatisfiable)?;
+                let note =
+                    Note::from_parts(note.debtor(), note.creditor(), new_value, note.rseed())
+                        .map_err(|_| SynthesisError::Unsatisfiable)?;
                 NoteVar::new_witness(cs.clone(), || Ok(note.clone()))?
             };
             expected_output_notes.push(note_var.commit()?);
@@ -239,6 +240,7 @@ impl DummyWitness for SettlementCircuit {
         )
         .expect("generated 1 address");
         let note = Note::from_parts(
+            address.clone(),
             address,
             Value::from_str("1upenumbra").expect("valid value"),
             Rseed([1u8; 32]),
@@ -373,7 +375,12 @@ mod tests {
     }
 
     prop_compose! {
-        fn arb_valid_settlement_statement()(seed_phrase_randomness in any::<[u8; 32]>(), rseed_randomness in any::<[u8; 32]>(), amount in 2u64.., asset_id64 in any::<u64>(), address_index in any::<u32>()) -> (SettlementProofPublic, SettlementProofPrivate) {
+        fn arb_valid_settlement_statement()(
+            seed_phrase_randomness in any::<[u8; 32]>(),
+            rseed_randomness in any::<[u8; 32]>(),
+            amount in 2u64.., asset_id64 in any::<u64>(),
+            address_index in any::<u32>()
+        ) -> (SettlementProofPublic, SettlementProofPrivate) {
             let seed_phrase = SeedPhrase::from_randomness(&seed_phrase_randomness);
             let sk_recipient = SpendKey::from_seed_phrase_bip44(seed_phrase, &Bip44Path::new(0));
             let fvk_recipient = sk_recipient.full_viewing_key();

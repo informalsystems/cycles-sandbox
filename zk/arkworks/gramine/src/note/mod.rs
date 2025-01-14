@@ -24,26 +24,41 @@ pub struct Note {
     rseed: Rseed,
     /// The address controlling this note.
     debtor: Address,
+    /// The credit of this note.
+    creditor: Address,
     /// The s-component of the transmission key of the destination address.
     /// We store this separately to ensure that every `Note` is constructed
     /// with a valid transmission key (the `ka::Public` does not validate
     /// the curve point until it is used, since validation is not free).
     transmission_key_s: Fq,
+    creditor_transmission_key_s: Fq,
 }
 
 impl Note {
-    pub fn from_parts(debtor: Address, value: Value, rseed: Rseed) -> Result<Self, Error> {
+    pub fn from_parts(
+        debtor: Address,
+        creditor: Address,
+        value: Value,
+        rseed: Rseed,
+    ) -> Result<Self, Error> {
         Ok(Self {
             value,
             rseed,
             debtor: debtor.clone(),
+            creditor: creditor.clone(),
             transmission_key_s: Fq::from_bytes_checked(&debtor.transmission_key().0)
+                .map_err(|_| Error::InvalidTransmissionKey)?,
+            creditor_transmission_key_s: Fq::from_bytes_checked(&creditor.transmission_key().0)
                 .map_err(|_| Error::InvalidTransmissionKey)?,
         })
     }
 
     pub fn debtor(&self) -> Address {
         self.debtor.clone()
+    }
+
+    pub fn creditor(&self) -> Address {
+        self.creditor.clone()
     }
 
     pub fn note_blinding(&self) -> Fq {
@@ -73,6 +88,7 @@ impl Note {
             self.diversified_generator(),
             self.transmission_key_s,
             self.debtor.clue_key(),
+            self.creditor_transmission_key_s,
         )
     }
 
@@ -94,6 +110,7 @@ impl std::fmt::Debug for Note {
         f.debug_struct("Note")
             .field("value", &self.value)
             .field("debtor", &self.debtor())
+            .field("creditor", &self.creditor())
             .field("rseed", &hex::encode(self.rseed.to_bytes()))
             .finish()
     }
@@ -105,8 +122,9 @@ pub fn commitment(
     diversified_generator: decaf377::Element,
     transmission_key_s: Fq,
     clue_key: &fmd::ClueKey,
+    creditor_transmission_key_s: Fq,
 ) -> StateCommitment {
-    let commit = poseidon377::hash_6(
+    let commit = poseidon377::hash_7(
         &NOTECOMMIT_DOMAIN_SEP,
         (
             note_blinding,
@@ -115,6 +133,7 @@ pub fn commitment(
             diversified_generator.vartime_compress_to_field(),
             transmission_key_s,
             Fq::from_le_bytes_mod_order(&clue_key.0[..]),
+            creditor_transmission_key_s,
         ),
     );
 

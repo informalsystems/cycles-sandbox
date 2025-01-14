@@ -16,6 +16,7 @@ pub struct NoteVar {
     pub value: ValueVar,
     pub note_blinding: FqVar,
     pub debtor: AddressVar,
+    pub creditor: AddressVar,
 }
 
 impl NoteVar {
@@ -64,12 +65,14 @@ impl AllocVar<Note, Fq> for NoteVar {
         let note: &Note = note1.borrow();
         let note_blinding = FqVar::new_variable(cs.clone(), || Ok(note.note_blinding()), mode)?;
         let value = ValueVar::new_variable(cs.clone(), || Ok(note.value()), mode)?;
-        let debtor = AddressVar::new_variable(cs, || Ok(note.debtor()), mode)?;
+        let debtor = AddressVar::new_variable(cs.clone(), || Ok(note.debtor()), mode)?;
+        let creditor = AddressVar::new_variable(cs, || Ok(note.creditor()), mode)?;
 
         Ok(Self {
             note_blinding,
             value,
             debtor,
+            creditor,
         })
     }
 }
@@ -81,6 +84,7 @@ impl ToConstraintField<Fq> for Note {
         elements.extend([note_blinding]);
         elements.extend(self.value().to_field_elements()?);
         elements.extend(self.debtor().to_field_elements()?);
+        elements.extend(self.creditor().to_field_elements()?);
         Some(elements)
     }
 }
@@ -95,7 +99,7 @@ impl NoteVar {
         let domain_sep = FqVar::new_constant(cs.clone(), *NOTECOMMIT_DOMAIN_SEP)?;
         let compressed_g_d = self.debtor.diversified_generator().compress_to_field()?;
 
-        let commitment = poseidon377::r1cs::hash_6(
+        let commitment = poseidon377::r1cs::hash_7(
             cs,
             &domain_sep,
             (
@@ -105,6 +109,7 @@ impl NoteVar {
                 compressed_g_d,
                 self.debtor.transmission_key().compress_to_field()?,
                 self.debtor.clue_key(),
+                self.creditor.transmission_key().compress_to_field()?,
             ),
         )?;
 

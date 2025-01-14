@@ -122,7 +122,8 @@ impl DummyWitness for OutputCircuit {
         )
         .expect("generated 1 address");
         let note = Note::from_parts(
-            address,
+            address.clone(),
+            address, // fixme: this should be a different address
             Value::from_str("1upenumbra").expect("valid value"),
             Rseed([1u8; 32]),
         )
