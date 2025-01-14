@@ -374,25 +374,34 @@ mod tests {
             .boxed()
     }
 
+    fn address_from_seed(seed_phrase_randomness: &[u8], index: u32) -> Address {
+        let seed_phrase = SeedPhrase::from_randomness(&seed_phrase_randomness);
+        let sk_recipient = SpendKey::from_seed_phrase_bip44(seed_phrase, &Bip44Path::new(0));
+        let fvk_recipient = sk_recipient.full_viewing_key();
+        let ivk_recipient = fvk_recipient.incoming();
+        let (dest, _dtk_d) = ivk_recipient.payment_address(index.into());
+        dest
+    }
+
     prop_compose! {
         fn arb_valid_settlement_statement()(
-            seed_phrase_randomness in any::<[u8; 32]>(),
+            seed_phrase_randomness_1 in any::<[u8; 32]>(),
+            seed_phrase_randomness_2 in any::<[u8; 32]>(),
             rseed_randomness in any::<[u8; 32]>(),
             amount in 2u64.., asset_id64 in any::<u64>(),
-            address_index in any::<u32>()
+            address_index_1 in any::<u32>(),
+            address_index_2 in any::<u32>()
         ) -> (SettlementProofPublic, SettlementProofPrivate) {
-            let seed_phrase = SeedPhrase::from_randomness(&seed_phrase_randomness);
-            let sk_recipient = SpendKey::from_seed_phrase_bip44(seed_phrase, &Bip44Path::new(0));
-            let fvk_recipient = sk_recipient.full_viewing_key();
-            let ivk_recipient = fvk_recipient.incoming();
-            let (dest, _dtk_d) = ivk_recipient.payment_address(address_index.into());
+            let dest_debtor = address_from_seed(&seed_phrase_randomness_1, address_index_1);
+            let dest_creditor = address_from_seed(&seed_phrase_randomness_2, address_index_2);
 
             let value_to_send = Value {
                 amount: Amount::from(amount),
                 asset_id: asset::Id(Fq::from(asset_id64)),
             };
             let input_note = Note::from_parts(
-                dest.clone(),
+                dest_debtor.clone(),
+                dest_creditor.clone(),
                 value_to_send,
                 Rseed(rseed_randomness),
             ).expect("should be able to create note");
@@ -404,7 +413,8 @@ mod tests {
                 asset_id: asset::Id(Fq::from(asset_id64)),
             };
             let output_note = Note::from_parts(
-                dest,
+                dest_debtor,
+                dest_creditor,
                 value_reduced,
                 Rseed(rseed_randomness),
             ).expect("should be able to create note");
@@ -428,19 +438,25 @@ mod tests {
     prop_compose! {
         // This strategy generates an settlement statement, but then replaces the note commitment
         // with one generated using an invalid note blinding factor.
-        fn arb_invalid_settlement_note_commitment_integrity()(seed_phrase_randomness in any::<[u8; 32]>(), rseed_randomness in any::<[u8; 32]>(), amount in 2u64.., asset_id64 in any::<u64>(), address_index in any::<u32>(), incorrect_note_blinding in fq_strategy()) -> (SettlementProofPublic, SettlementProofPrivate) {
-            let seed_phrase = SeedPhrase::from_randomness(&seed_phrase_randomness);
-            let sk_recipient = SpendKey::from_seed_phrase_bip44(seed_phrase, &Bip44Path::new(0));
-            let fvk_recipient = sk_recipient.full_viewing_key();
-            let ivk_recipient = fvk_recipient.incoming();
-            let (dest, _dtk_d) = ivk_recipient.payment_address(address_index.into());
+        fn arb_invalid_settlement_note_commitment_integrity()(
+            seed_phrase_randomness_1 in any::<[u8; 32]>(),
+            seed_phrase_randomness_2 in any::<[u8; 32]>(),
+            rseed_randomness in any::<[u8; 32]>(),
+            amount in 2u64.., asset_id64 in any::<u64>(),
+            address_index_1 in any::<u32>(),
+            address_index_2 in any::<u32>(),
+            incorrect_note_blinding in fq_strategy()
+        ) -> (SettlementProofPublic, SettlementProofPrivate) {
+            let dest_debtor = address_from_seed(&seed_phrase_randomness_1, address_index_1);
+            let dest_creditor = address_from_seed(&seed_phrase_randomness_2, address_index_2);
 
             let value_to_send = Value {
                 amount: Amount::from(amount),
                 asset_id: asset::Id(Fq::from(asset_id64)),
             };
             let note = Note::from_parts(
-                dest,
+                dest_debtor,
+                dest_creditor,
                 value_to_send,
                 Rseed(rseed_randomness),
             ).expect("should be able to create note");
@@ -451,6 +467,7 @@ mod tests {
                 note.diversified_generator(),
                 note.transmission_key_s(),
                 note.clue_key(),
+                note.creditor().transmission_key_s().clone()
             );
 
             let bad_public = SettlementProofPublic { output_notes_commitments: vec![incorrect_note_commitment], nullifiers: vec![]};
