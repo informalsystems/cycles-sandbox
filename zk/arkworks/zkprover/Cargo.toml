@@ -3,6 +3,10 @@ name = "zkprover"
 version = "0.1.0"
 edition = "2021"
 
+[lib]
+crate-type = ["cdylib"]
+name = "zkprover" # This is our crate name in this tutorial
+
 [dependencies]
 uniffi = { version = "0.28.3" }
 
