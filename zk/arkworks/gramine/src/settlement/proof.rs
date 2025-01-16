@@ -2,13 +2,14 @@ use std::cmp::Ordering;
 use std::str::FromStr;
 
 use anyhow::Result;
-use ark_ff::ToConstraintField;
+use ark_ff::{ToConstraintField, Zero};
 use ark_groth16::r1cs_to_qap::LibsnarkReduction;
 use ark_groth16::{Groth16, PreparedVerifyingKey, Proof, ProvingKey};
 use ark_r1cs_std::prelude::*;
 use ark_relations::r1cs::{ConstraintSynthesizer, ConstraintSystemRef, SynthesisError};
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_snark::SNARK;
+use arkworks_merkle_tree::poseidontree::{Poseidon377MerklePath, Root};
 use base64::prelude::*;
 use decaf377::{Bls12_377, Fq};
 use decaf377_fmd as fmd;
@@ -31,6 +32,8 @@ pub struct SettlementProofPublic {
     pub output_notes_commitments: Vec<note::StateCommitment>,
     /// Nullifiers for input notes.
     pub nullifiers: Vec<Nullifier>,
+    /// merkle root of SCT
+    pub root: Root,
 }
 
 /// The private input for an [`SettlementProof`].
@@ -40,6 +43,8 @@ pub struct SettlementProofPrivate {
     pub output_notes: Vec<Note>,
     /// The input notes being spent.
     pub input_notes: Vec<Note>,
+    /// Membership proof for all input notes.
+    pub input_notes_proofs: Vec<Poseidon377MerklePath>,
     /// Setoff amount for this cycle.
     pub setoff_amount: Amount,
 }
@@ -290,10 +295,12 @@ impl DummyWitness for SettlementCircuit {
         let public = SettlementProofPublic {
             output_notes_commitments: vec![note.commit()],
             nullifiers: vec![Nullifier::derive(&note)],
+            root: Fq::zero(),
         };
         let private = SettlementProofPrivate {
             output_notes: vec![note.clone()],
             input_notes: vec![note],
+            input_notes_proofs: vec![],
             setoff_amount: Amount::zero(),
         };
         SettlementCircuit { public, private }
