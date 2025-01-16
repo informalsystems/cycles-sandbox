@@ -2,13 +2,14 @@ use std::cmp::Ordering;
 use std::str::FromStr;
 
 use anyhow::Result;
-use ark_ff::ToConstraintField;
+use ark_ff::{ToConstraintField, Zero};
 use ark_groth16::r1cs_to_qap::LibsnarkReduction;
 use ark_groth16::{Groth16, PreparedVerifyingKey, Proof, ProvingKey};
 use ark_r1cs_std::prelude::*;
 use ark_relations::r1cs::{ConstraintSynthesizer, ConstraintSystemRef, SynthesisError};
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_snark::SNARK;
+use arkworks_merkle_tree::poseidontree::{Poseidon377MerklePath, Root};
 use base64::prelude::*;
 use decaf377::{Bls12_377, Fq};
 use decaf377_fmd as fmd;
@@ -49,6 +50,8 @@ pub struct SettlementProofPrivate {
     pub output_notes: Vec<Note>,
     /// The input notes being spent.
     pub input_notes: Vec<Note>,
+    /// Membership proof for all input notes.
+    pub input_notes_proofs: Vec<Poseidon377MerklePath>,
     /// Setoff amount for this cycle.
     pub setoff_amount: Amount,
     /// Auth paths for input notes
@@ -356,6 +359,7 @@ impl DummyWitness for SettlementCircuit {
         let private = SettlementProofPrivate {
             output_notes: vec![note.clone()],
             input_notes: vec![note],
+            input_notes_proofs: vec![],
             setoff_amount: Amount::zero(),
             authentication_path: auth_path
         };
