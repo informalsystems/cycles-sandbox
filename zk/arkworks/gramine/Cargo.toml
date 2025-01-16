@@ -30,6 +30,10 @@ rand_core                        = { version = "0.6.4", default-features = false
 serde                            = { version = "1.0.216", features = ["derive"], default-features = false }
 tracing                          = { version = "0.1.41", default-features = false }
 
+arkworks-merkle-tree = { path = "../../../../arkworks-merkle-tree" }
+ark-std = "0.5.0" # Only used for temporary random poseidon param generation
+decaf377-fork = { path = "../../../../decaf377", package = "decaf377"}
+
 [dev-dependencies]
 proptest                         = { version = "1" }
 penumbra-num                     = { version = "0.80.9", default-features = false }

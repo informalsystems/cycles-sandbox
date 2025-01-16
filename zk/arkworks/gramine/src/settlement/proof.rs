@@ -24,6 +24,9 @@ use penumbra_tct::r1cs::StateCommitmentVar;
 use crate::note::{r1cs::NoteVar, Note};
 use crate::nullifier::{Nullifier, NullifierVar};
 
+use arkworks_merkle_tree::poseidontree::{LeafHashParams, Poseidon377MerklePath, Root, TwoToOneHashParams, PoseidonConfig, Poseidon377MerkleTree};
+// use decaf377_fork;
+
 /// The public input for an [`SettlementProof`].
 #[derive(Clone, Debug)]
 pub struct SettlementProofPublic {
@@ -31,6 +34,12 @@ pub struct SettlementProofPublic {
     pub output_notes_commitments: Vec<note::StateCommitment>,
     /// Nullifiers for input notes.
     pub nullifiers: Vec<Nullifier>,
+    // These are the public inputs to the circuit merkle tree verification circuit
+    pub root: Root,
+    pub leaves: Vec<Fq>, // todo: check if Fq is correct
+    // Poseidon CRH constants that will be embedded into the circuit
+    pub leaf_crh_params: LeafHashParams,
+    pub two_to_one_crh_params: TwoToOneHashParams,
 }
 
 /// The private input for an [`SettlementProof`].
@@ -42,6 +51,8 @@ pub struct SettlementProofPrivate {
     pub input_notes: Vec<Note>,
     /// Setoff amount for this cycle.
     pub setoff_amount: Amount,
+    /// Auth paths for input notes
+    pub authentication_path: Vec<Poseidon377MerklePath>,
 }
 
 #[cfg(test)]
@@ -267,6 +278,35 @@ impl ConstraintSynthesizer<Fq> for SettlementCircuit {
     }
 }
 
+fn generate_poseidon_params() -> (PoseidonConfig<Fq>, PoseidonConfig<Fq>) {
+    use rand_core::RngCore;
+
+    let (mds, ark) = {
+        let mut test_rng = ark_std::test_rng();
+
+        let mut mds = vec![vec![]; 3];
+        for i in 0..3 {
+            for _ in 0..3 {
+                mds[i].push(Fq::from(test_rng.next_u64()));
+            }
+        }
+
+        let mut ark = vec![vec![]; 8 + 24];
+        for i in 0..8 + 24 {
+            for _ in 0..3 {
+                ark[i].push(Fq::from(test_rng.next_u64()));
+            }
+        }
+
+        (mds, ark)
+    };
+
+    let leaf_crh_params = PoseidonConfig::<Fq>::new(8, 24, 31, mds.clone(), ark.clone(), 2, 1);
+    let two_to_one_crh_params = PoseidonConfig::<Fq>::new(8, 24, 31, mds, ark, 2, 1);
+
+    (leaf_crh_params, two_to_one_crh_params)
+}
+
 impl DummyWitness for SettlementCircuit {
     fn with_dummy_witness() -> Self {
         let diversifier_bytes = [1u8; 16];
@@ -287,15 +327,39 @@ impl DummyWitness for SettlementCircuit {
         )
         .expect("can make a note");
 
+        // Merkle tree circuit setup steps
+        // Poseidon params
+        let (leaf_crh_params, two_to_one_crh_params) = generate_poseidon_params();
+
+        let leaves: Vec<[Fq; 1]> = vec![[note.commit().0]];
+        let leaves_borrowed: Vec<_> = leaves.iter().map(|leaf| *leaf).collect();
+
+        // Build tree with our one dummy note in order to get the merkle root value
+        let tree = Poseidon377MerkleTree::new(
+            &leaf_crh_params,
+            &two_to_one_crh_params,
+            leaves_borrowed,
+        )
+        .unwrap();
+
+        // Get auth path from 0th leaf to root
+        let auth_path = tree.generate_proof(4).unwrap(); 
+
         let public = SettlementProofPublic {
             output_notes_commitments: vec![note.commit()],
             nullifiers: vec![Nullifier::derive(&note)],
+            leaf_crh_params,
+            two_to_one_crh_params,
+            leaves: vec![note.commit().0],
+            root: tree.root()
         };
         let private = SettlementProofPrivate {
             output_notes: vec![note.clone()],
             input_notes: vec![note],
             setoff_amount: Amount::zero(),
+            authentication_path: auth_path
         };
+
         SettlementCircuit { public, private }
     }
 }
