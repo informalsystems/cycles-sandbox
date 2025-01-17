@@ -118,6 +118,8 @@ fn check_satisfaction(
     public: &SettlementProofPublic,
     private: &SettlementProofPrivate,
 ) -> Result<()> {
+    // TODO: impl note well-formedness checks
+
     for (note_commitment, note) in public
         .output_notes_commitments
         .iter()
@@ -235,6 +237,8 @@ impl SettlementCircuit {
 
 impl ConstraintSynthesizer<Fq> for SettlementCircuit {
     fn generate_constraints(self, cs: ConstraintSystemRef<Fq>) -> ark_relations::r1cs::Result<()> {
+        // TODO: impl note well-formedness checks
+
         for (note_commitment, note) in self
             .public
             .output_notes_commitments
@@ -578,30 +582,44 @@ mod tests {
                 amount: Amount::from(amount),
                 asset_id: asset::Id(Fq::from(asset_id64)),
             };
-            let input_note = Note::from_parts(
+            let input_note_1 = Note::from_parts(
                 dest_debtor.clone(),
                 dest_creditor.clone(),
                 value_to_send,
                 Rseed(rseed_randomness),
             ).expect("should be able to create note");
-            let input_note_nullifier = Nullifier::derive(&input_note);
+            let input_note_nullifier_1 = Nullifier::derive(&input_note_1);
 
-            let setoff_amount = amount/2;
+            let input_note_2 = Note::from_parts(
+                dest_creditor.clone(),
+                dest_debtor.clone(),
+                value_to_send,
+                Rseed(rseed_randomness),
+            ).expect("should be able to create note");
+            let input_note_nullifier_2 = Nullifier::derive(&input_note_2);
+
+            let setoff_amount = amount;
             let value_reduced = Value {
                 amount: Amount::from(amount - setoff_amount),
                 asset_id: asset::Id(Fq::from(asset_id64)),
             };
-            let output_note = Note::from_parts(
-                dest_debtor,
-                dest_creditor,
+            let output_note_1 = Note::from_parts(
+                dest_debtor.clone(),
+                dest_creditor.clone(),
                 value_reduced,
                 Rseed(rseed_randomness),
             ).expect("should be able to create note");
-            let output_note_commitment = output_note.commit();
+            let output_note_commitment_1 = output_note_1.commit();
+            let output_note_2 = Note::from_parts(
+                dest_creditor,
+                dest_debtor,
+                value_reduced,
+                Rseed(rseed_randomness),
+            ).expect("should be able to create note");
+            let output_note_commitment_2 = output_note_2.commit();
 
             let constants = SettlementProofConst::default();
-            let leaves: Vec<[Fq; 1]> = vec![[input_note.commit().0], [output_note.commit().0]];
-
+            let leaves: Vec<[Fq; 1]> = vec![[input_note_1.commit().0], [input_note_2.commit().0]];
             // Build tree with our one dummy note in order to get the merkle root value
             let tree = Poseidon377MerkleTree::new(
                 &constants.leaf_crh_params,
@@ -611,10 +629,20 @@ mod tests {
             .unwrap();
 
             // Get auth path from 0th leaf to root (input note)
-            let input_auth_path = tree.generate_proof(0).unwrap();
+            let input_auth_path_1 = tree.generate_proof(0).unwrap();
+            let input_auth_path_2 = tree.generate_proof(1).unwrap();
 
-            let public = SettlementProofPublic { output_notes_commitments: vec![output_note_commitment], nullifiers: vec![input_note_nullifier], root: tree.root(), leaves: vec![leaves[0]]};
-            let private = SettlementProofPrivate { output_notes: vec![output_note], input_notes: vec![input_note], setoff_amount: Amount::from(setoff_amount), input_notes_proofs: vec![input_auth_path]};
+            let public = SettlementProofPublic {
+                output_notes_commitments: vec![output_note_commitment_1, output_note_commitment_2],
+                nullifiers: vec![input_note_nullifier_1, input_note_nullifier_2],
+                root: tree.root(),
+            };
+            let private = SettlementProofPrivate {
+                output_notes: vec![output_note_1, output_note_2],
+                input_notes: vec![input_note_1, input_note_2],
+                setoff_amount: Amount::from(setoff_amount),
+                input_notes_proofs: vec![input_auth_path_1, input_auth_path_2]
+            };
 
             (public, private)
         }
