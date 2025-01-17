@@ -138,14 +138,16 @@ fn check_satisfaction(
         }
     }
 
+    let constants = SettlementProofConst::default();
+
     for (note, auth_path) in private
         .input_notes
         .iter()
         .zip(private.input_notes_proofs.iter())
     {
         let note_path_valid = auth_path.verify(
-            &public.leaf_crh_params,
-            &public.two_to_one_crh_params,
+            &constants.leaf_crh_params,
+            &constants.two_to_one_crh_params,
             &public.root,
             [note.commit().0],
         );
@@ -208,7 +210,11 @@ fn check_circuit_satisfaction(
     use ark_relations::r1cs::{self, ConstraintSystem};
 
     let cs = ConstraintSystem::new_ref();
-    let circuit = SettlementCircuit { public, private };
+    let circuit = SettlementCircuit {
+        public,
+        private,
+        constants: Default::default(),
+    };
     cs.set_optimization_goal(r1cs::OptimizationGoal::Constraints);
     circuit
         .generate_constraints(cs.clone())
@@ -224,11 +230,16 @@ fn check_circuit_satisfaction(
 pub struct SettlementCircuit {
     public: SettlementProofPublic,
     private: SettlementProofPrivate,
+    constants: SettlementProofConst,
 }
 
 impl SettlementCircuit {
     fn new(public: SettlementProofPublic, private: SettlementProofPrivate) -> Self {
-        Self { public, private }
+        Self {
+            public,
+            private,
+            constants: Default::default(),
+        }
     }
 }
 
@@ -354,35 +365,6 @@ impl ConstraintSynthesizer<Fq> for SettlementCircuit {
     }
 }
 
-fn generate_poseidon_params() -> (PoseidonConfig<Fq>, PoseidonConfig<Fq>) {
-    use rand_core::RngCore;
-
-    let (mds, ark) = {
-        let mut test_rng = ark_std::test_rng();
-
-        let mut mds = vec![vec![]; 3];
-        for i in 0..3 {
-            for _ in 0..3 {
-                mds[i].push(Fq::from(test_rng.next_u64()));
-            }
-        }
-
-        let mut ark = vec![vec![]; 8 + 24];
-        for i in 0..8 + 24 {
-            for _ in 0..3 {
-                ark[i].push(Fq::from(test_rng.next_u64()));
-            }
-        }
-
-        (mds, ark)
-    };
-
-    let leaf_crh_params = PoseidonConfig::<Fq>::new(8, 24, 31, mds.clone(), ark.clone(), 2, 1);
-    let two_to_one_crh_params = PoseidonConfig::<Fq>::new(8, 24, 31, mds, ark, 2, 1);
-
-    (leaf_crh_params, two_to_one_crh_params)
-}
-
 impl DummyWitness for SettlementCircuit {
     fn with_dummy_witness() -> Self {
         let diversifier_bytes = [1u8; 16];
@@ -404,16 +386,18 @@ impl DummyWitness for SettlementCircuit {
         .expect("can make a note");
 
         // Merkle tree circuit setup steps
-        // Poseidon params
-        let (leaf_crh_params, two_to_one_crh_params) = generate_poseidon_params();
+        let constants = SettlementProofConst::default();
 
         // Enter duplicate commit to satisfy the need for >1 leaves in the `MerkleTree::new` function
         let leaves: Vec<[Fq; 1]> = vec![[note.commit().0]];
 
         // Build tree with our one dummy note in order to get the merkle root value
-        let tree =
-            Poseidon377MerkleTree::new(&leaf_crh_params, &two_to_one_crh_params, leaves.clone())
-                .unwrap();
+        let tree = Poseidon377MerkleTree::new(
+            &constants.leaf_crh_params,
+            &constants.two_to_one_crh_params,
+            leaves.clone(),
+        )
+        .unwrap();
 
         // Get auth path from 0th leaf to root
         let auth_path = tree.generate_proof(4).unwrap();
@@ -431,7 +415,11 @@ impl DummyWitness for SettlementCircuit {
             input_notes_proofs: vec![auth_path],
         };
 
-        SettlementCircuit { public, private }
+        SettlementCircuit {
+            public,
+            private,
+            constants: Default::default(),
+        }
     }
 }
 
@@ -595,13 +583,13 @@ mod tests {
             ).expect("should be able to create note");
             let output_note_commitment = output_note.commit();
 
-            let (leaf_crh_params, two_to_one_crh_params) = generate_poseidon_params();
+            let constants = SettlementProofConst::default();
             let leaves: Vec<[Fq; 1]> = vec![[input_note.commit().0], [output_note.commit().0]];
 
             // Build tree with our one dummy note in order to get the merkle root value
             let tree = Poseidon377MerkleTree::new(
-                &leaf_crh_params,
-                &two_to_one_crh_params,
+                &constants.leaf_crh_params,
+                &constants.two_to_one_crh_params,
                 leaves.clone(),
             )
             .unwrap();
@@ -609,7 +597,7 @@ mod tests {
             // Get auth path from 0th leaf to root (input note)
             let input_auth_path = tree.generate_proof(0).unwrap();
 
-            let public = SettlementProofPublic { output_notes_commitments: vec![output_note_commitment], nullifiers: vec![input_note_nullifier], leaf_crh_params, two_to_one_crh_params, root: tree.root(), leaves: vec![leaves[0]]};
+            let public = SettlementProofPublic { output_notes_commitments: vec![output_note_commitment], nullifiers: vec![input_note_nullifier], root: tree.root(), leaves: vec![leaves[0]]};
             let private = SettlementProofPrivate { output_notes: vec![output_note], input_notes: vec![input_note], setoff_amount: Amount::from(setoff_amount), input_notes_proofs: vec![input_auth_path]};
 
             (public, private)
@@ -666,13 +654,13 @@ mod tests {
                 note.creditor().transmission_key_s().clone()
             );
 
-            let (leaf_crh_params, two_to_one_crh_params) = generate_poseidon_params();
+            let constants = SettlementProofConst::default();
             let leaves: Vec<[Fq; 1]> = vec![[note.commit().0]];
 
             // Build tree with our one dummy note in order to get the merkle root value
             let tree = Poseidon377MerkleTree::new(
-                &leaf_crh_params,
-                &two_to_one_crh_params,
+                &constants.leaf_crh_params,
+                &constants.two_to_one_crh_params,
                 leaves.clone(),
             )
             .unwrap();
@@ -680,7 +668,7 @@ mod tests {
             // Get auth path from 0th leaf to root (input note)
             let input_auth_path = tree.generate_proof(0).unwrap();
 
-            let bad_public = SettlementProofPublic { output_notes_commitments: vec![incorrect_note_commitment], nullifiers: vec![nullifier], root: tree.root(), leaves, leaf_crh_params, two_to_one_crh_params};
+            let bad_public = SettlementProofPublic { output_notes_commitments: vec![incorrect_note_commitment], nullifiers: vec![nullifier], root: tree.root(), leaves};
             let private = SettlementProofPrivate { output_notes: vec![note], input_notes: vec![], setoff_amount: Amount::zero(), input_notes_proofs: vec![input_auth_path]};
 
             (bad_public, private)
