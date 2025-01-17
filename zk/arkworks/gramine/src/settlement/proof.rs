@@ -41,7 +41,6 @@ pub struct SettlementProofPublic {
     pub nullifiers: Vec<Nullifier>,
     // These are the public inputs to the circuit merkle tree verification circuit
     pub root: Root,
-    pub leaves: Vec<[Fq; 1]>,
 }
 
 /// The private input for an [`SettlementProof`].
@@ -160,14 +159,13 @@ fn check_satisfaction(
 
     for notes in private.input_notes.windows(2) {
         anyhow::ensure!(
-            notes[0].creditor() != notes[1].debtor(),
+            notes[0].creditor() == notes[1].debtor(),
             "creditor does not match debtor in settlement flow"
         );
     }
-    // TODO: happy path breaks with this
     anyhow::ensure!(
         private.input_notes.first().unwrap().debtor()
-            != private.input_notes.last().unwrap().debtor(),
+            == private.input_notes.last().unwrap().creditor(),
         "first debtor does not match last creditor in settlement flow"
     );
 
@@ -423,12 +421,11 @@ impl DummyWitness for SettlementCircuit {
         .unwrap();
 
         // Get auth path from 0th leaf to root
-        let auth_path = tree.generate_proof(4).unwrap();
+        let auth_path = tree.generate_proof(0).unwrap();
 
         let public = SettlementProofPublic {
             output_notes_commitments: vec![note.commit()],
             nullifiers: vec![Nullifier::derive(&note)],
-            leaves: vec![leaves[0]], // dont include the duplicate leaf
             root: tree.root(),
         };
         let private = SettlementProofPrivate {
@@ -687,7 +684,7 @@ mod tests {
             // Get auth path from 0th leaf to root (input note)
             let input_auth_path = tree.generate_proof(0).unwrap();
 
-            let bad_public = SettlementProofPublic { output_notes_commitments: vec![incorrect_note_commitment], nullifiers: vec![nullifier], root: tree.root(), leaves};
+            let bad_public = SettlementProofPublic { output_notes_commitments: vec![incorrect_note_commitment], nullifiers: vec![nullifier], root: tree.root()};
             let private = SettlementProofPrivate { output_notes: vec![note], input_notes: vec![], setoff_amount: Amount::zero(), input_notes_proofs: vec![input_auth_path]};
 
             (bad_public, private)
