@@ -9,7 +9,6 @@ use ark_r1cs_std::prelude::*;
 use ark_relations::r1cs::{ConstraintSynthesizer, ConstraintSystemRef, SynthesisError};
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_snark::SNARK;
-use arkworks_merkle_tree::poseidontree::{Poseidon377MerklePath, Root};
 use base64::prelude::*;
 use decaf377::{Bls12_377, Fq};
 use decaf377_fmd as fmd;
@@ -37,7 +36,7 @@ pub struct SettlementProofPublic {
     pub nullifiers: Vec<Nullifier>,
     // These are the public inputs to the circuit merkle tree verification circuit
     pub root: Root,
-    pub leaves: Vec<Fq>, // todo: check if Fq is correct
+    pub leaves: Vec<[Fq; 1]>, // todo: check if Fq is correct
     // Poseidon CRH constants that will be embedded into the circuit
     pub leaf_crh_params: LeafHashParams,
     pub two_to_one_crh_params: TwoToOneHashParams,
@@ -54,8 +53,6 @@ pub struct SettlementProofPrivate {
     pub input_notes_proofs: Vec<Poseidon377MerklePath>,
     /// Setoff amount for this cycle.
     pub setoff_amount: Amount,
-    /// Auth paths for input notes
-    pub authentication_path: Vec<Poseidon377MerklePath>,
 }
 
 #[cfg(test)]
@@ -83,12 +80,18 @@ fn check_satisfaction(
         }
     }
 
+    for (note, auth_path) in private.input_notes.iter().zip(private.input_notes_proofs.iter()) {
+        let note_path_valid = auth_path.verify(&public.leaf_crh_params, &public.two_to_one_crh_params, &public.root, [note.commit().0]);
+        anyhow::ensure!(note_path_valid.is_ok(), format!("couldn't verify note auth path for note {:?}", note))
+    }
+
     for notes in private.input_notes.windows(2) {
         anyhow::ensure!(
             notes[0].creditor() != notes[1].debtor(),
             "creditor does not match debtor in settlement flow"
         );
     }
+    // TODO: happy path breaks with this
     anyhow::ensure!(
         private.input_notes.first().unwrap().debtor()
             != private.input_notes.last().unwrap().debtor(),
@@ -334,17 +337,17 @@ impl DummyWitness for SettlementCircuit {
         // Poseidon params
         let (leaf_crh_params, two_to_one_crh_params) = generate_poseidon_params();
 
+        // Enter duplicate commit to satisfy the need for >1 leaves in the `MerkleTree::new` function
         let leaves: Vec<[Fq; 1]> = vec![[note.commit().0]];
-        let leaves_borrowed: Vec<_> = leaves.iter().map(|leaf| *leaf).collect();
-
+ 
         // Build tree with our one dummy note in order to get the merkle root value
         let tree = Poseidon377MerkleTree::new(
             &leaf_crh_params,
             &two_to_one_crh_params,
-            leaves_borrowed,
+            leaves.clone(),
         )
         .unwrap();
-
+ 
         // Get auth path from 0th leaf to root
         let auth_path = tree.generate_proof(4).unwrap(); 
 
@@ -353,15 +356,14 @@ impl DummyWitness for SettlementCircuit {
             nullifiers: vec![Nullifier::derive(&note)],
             leaf_crh_params,
             two_to_one_crh_params,
-            leaves: vec![note.commit().0],
+            leaves: vec![leaves[0]], // dont include the duplicate leaf
             root: tree.root()
         };
         let private = SettlementProofPrivate {
             output_notes: vec![note.clone()],
             input_notes: vec![note],
-            input_notes_proofs: vec![],
             setoff_amount: Amount::zero(),
-            authentication_path: auth_path
+            input_notes_proofs: vec![auth_path]
         };
 
         SettlementCircuit { public, private }
@@ -528,8 +530,22 @@ mod tests {
             ).expect("should be able to create note");
             let output_note_commitment = output_note.commit();
 
-            let public = SettlementProofPublic { output_notes_commitments: vec![output_note_commitment], nullifiers: vec![input_note_nullifier]};
-            let private = SettlementProofPrivate { output_notes: vec![output_note], input_notes: vec![input_note], setoff_amount: Amount::from(setoff_amount)};
+            let (leaf_crh_params, two_to_one_crh_params) = generate_poseidon_params();
+            let leaves: Vec<[Fq; 1]> = vec![[input_note.commit().0], [output_note.commit().0]];
+
+            // Build tree with our one dummy note in order to get the merkle root value
+            let tree = Poseidon377MerkleTree::new(
+                &leaf_crh_params,
+                &two_to_one_crh_params,
+                leaves.clone(),
+            )
+            .unwrap();
+    
+            // Get auth path from 0th leaf to root (input note)
+            let input_auth_path = tree.generate_proof(0).unwrap(); 
+
+            let public = SettlementProofPublic { output_notes_commitments: vec![output_note_commitment], nullifiers: vec![input_note_nullifier], leaf_crh_params, two_to_one_crh_params, root: tree.root(), leaves: vec![leaves[0]]};
+            let private = SettlementProofPrivate { output_notes: vec![output_note], input_notes: vec![input_note], setoff_amount: Amount::from(setoff_amount), input_notes_proofs: vec![input_auth_path]};
 
             (public, private)
         }
@@ -538,8 +554,14 @@ mod tests {
     proptest! {
         #[test]
         fn settlement_proof_happy_path((public, private) in arb_valid_settlement_statement()) {
-            assert!(check_satisfaction(&public, &private).is_ok());
-            assert!(check_circuit_satisfaction(public, private).is_ok());
+            if let Err(e) = check_satisfaction(&public, &private) {
+                println!("check_satisfaction failed: {:?}", e);
+                assert!(false, "check_satisfaction failed");
+            }
+            if let Err(e) = check_circuit_satisfaction(public, private) {
+                println!("check_circuit_satisfaction failed: {:?}", e);
+                assert!(false, "check_circuit_satisfaction failed");
+            }
         }
     }
 
@@ -568,6 +590,7 @@ mod tests {
                 value_to_send,
                 Rseed(rseed_randomness),
             ).expect("should be able to create note");
+            let nullifier = Nullifier::derive(&note);
 
             let incorrect_note_commitment = commitment(
                 incorrect_note_blinding,
@@ -578,8 +601,22 @@ mod tests {
                 note.creditor().transmission_key_s().clone()
             );
 
-            let bad_public = SettlementProofPublic { output_notes_commitments: vec![incorrect_note_commitment], nullifiers: vec![]};
-            let private = SettlementProofPrivate { output_notes: vec![note], input_notes: vec![], setoff_amount: Amount::zero()};
+            let (leaf_crh_params, two_to_one_crh_params) = generate_poseidon_params();
+            let leaves: Vec<[Fq; 1]> = vec![[note.commit().0]];
+
+            // Build tree with our one dummy note in order to get the merkle root value
+            let tree = Poseidon377MerkleTree::new(
+                &leaf_crh_params,
+                &two_to_one_crh_params,
+                leaves.clone(),
+            )
+            .unwrap();
+    
+            // Get auth path from 0th leaf to root (input note)
+            let input_auth_path = tree.generate_proof(0).unwrap(); 
+
+            let bad_public = SettlementProofPublic { output_notes_commitments: vec![incorrect_note_commitment], nullifiers: vec![nullifier], root: tree.root(), leaves, leaf_crh_params, two_to_one_crh_params};
+            let private = SettlementProofPrivate { output_notes: vec![note], input_notes: vec![], setoff_amount: Amount::zero(), input_notes_proofs: vec![input_auth_path]};
 
             (bad_public, private)
         }

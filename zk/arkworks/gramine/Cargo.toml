@@ -34,20 +34,10 @@ tracing                          = { version = "0.1.41", default-features = fals
 
 arkworks-merkle-tree = { path = "../../../../arkworks-merkle-tree" }
 ark-std = "0.5.0" # Only used for temporary random poseidon param generation
-decaf377-fork = { path = "../../../../decaf377", package = "decaf377"}
+# decaf377-fork = { path = "../../../../decaf377", package = "decaf377"}
 
 [dev-dependencies]
 proptest                         = { version = "1" }
 
 [patch.crates-io]
-decaf377-fmd                     = { git = "https://github.com/penumbra-zone/penumbra.git", tag = "v0.80.9" }
-decaf377-ka                      = { git = "https://github.com/penumbra-zone/penumbra.git", tag = "v0.80.9" }
-penumbra-asset                   = { git = "https://github.com/penumbra-zone/penumbra.git", tag = "v0.80.9" }
-penumbra-keys                    = { git = "https://github.com/penumbra-zone/penumbra.git", tag = "v0.80.9" }
-penumbra-num                     = { git = "https://github.com/penumbra-zone/penumbra.git", tag = "v0.80.9" }
-penumbra-proof-params            = { git = "https://github.com/penumbra-zone/penumbra.git", tag = "v0.80.9" }
-penumbra-proto                   = { git = "https://github.com/penumbra-zone/penumbra.git", tag = "v0.80.9" }
-penumbra-shielded-pool           = { git = "https://github.com/penumbra-zone/penumbra.git", tag = "v0.80.9" }
-penumbra-sct                     = { git = "https://github.com/penumbra-zone/penumbra.git", tag = "v0.80.9" }
-penumbra-tct                     = { git = "https://github.com/penumbra-zone/penumbra.git", tag = "v0.80.9" }
 decaf377                         = { git = "https://github.com/hu55a1n1/decaf377.git" }
