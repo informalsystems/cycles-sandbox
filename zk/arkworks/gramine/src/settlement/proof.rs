@@ -2,7 +2,7 @@ use std::cmp::Ordering;
 use std::str::FromStr;
 
 use anyhow::Result;
-use ark_ff::{ToConstraintField, Zero};
+use ark_ff::ToConstraintField;
 use ark_groth16::r1cs_to_qap::LibsnarkReduction;
 use ark_groth16::{Groth16, PreparedVerifyingKey, Proof, ProvingKey};
 use ark_r1cs_std::prelude::*;
@@ -20,12 +20,16 @@ use penumbra_proof_params::{DummyWitness, VerifyingKeyExt, GROTH16_PROOF_LENGTH_
 use penumbra_proto::{penumbra::core::component::shielded_pool::v1 as pb, DomainType};
 use penumbra_shielded_pool::{note, Rseed};
 use penumbra_tct::r1cs::StateCommitmentVar;
+use poseidon377::{RATE_1_PARAMS, RATE_2_PARAMS};
+use poseidon_parameters::v1::Matrix;
 
 use crate::note::{r1cs::NoteVar, Note};
 use crate::nullifier::{Nullifier, NullifierVar};
 
-use arkworks_merkle_tree::poseidontree::{LeafHashParams, Poseidon377MerklePath, Root, TwoToOneHashParams, PoseidonConfig, Poseidon377MerkleTree};
-// use decaf377_fork;
+use ark_crypto_primitives::sponge::poseidon::PoseidonConfig;
+use arkworks_merkle_tree::poseidontree::{
+    LeafHashParams, Poseidon377MerklePath, Poseidon377MerkleTree, Root, TwoToOneHashParams,
+};
 
 /// The public input for an [`SettlementProof`].
 #[derive(Clone, Debug)]
@@ -36,10 +40,7 @@ pub struct SettlementProofPublic {
     pub nullifiers: Vec<Nullifier>,
     // These are the public inputs to the circuit merkle tree verification circuit
     pub root: Root,
-    pub leaves: Vec<[Fq; 1]>, // todo: check if Fq is correct
-    // Poseidon CRH constants that will be embedded into the circuit
-    pub leaf_crh_params: LeafHashParams,
-    pub two_to_one_crh_params: TwoToOneHashParams,
+    pub leaves: Vec<[Fq; 1]>,
 }
 
 /// The private input for an [`SettlementProof`].
@@ -53,6 +54,63 @@ pub struct SettlementProofPrivate {
     pub input_notes_proofs: Vec<Poseidon377MerklePath>,
     /// Setoff amount for this cycle.
     pub setoff_amount: Amount,
+}
+
+/// The const input for an [`SettlementProof`].
+#[derive(Clone, Debug)]
+pub struct SettlementProofConst {
+    // Poseidon CRH constants that will be embedded into the circuit
+    pub leaf_crh_params: LeafHashParams,
+    pub two_to_one_crh_params: TwoToOneHashParams,
+}
+
+impl Default for SettlementProofConst {
+    fn default() -> Self {
+        // fixme: unsafe alpha conversion?
+        let leaf_crh_params = {
+            let params = RATE_1_PARAMS;
+            PoseidonConfig::<Fq>::new(
+                params.rounds.full(),
+                params.rounds.partial(),
+                u32::from_le_bytes(params.alpha.to_bytes_le()).into(),
+                params.mds.0 .0.into_nested_vec(),
+                params.arc.0.into_nested_vec(),
+                1,
+                1,
+            )
+        };
+        let two_to_one_crh_params = {
+            let params = RATE_2_PARAMS;
+            PoseidonConfig::<Fq>::new(
+                params.rounds.full(),
+                params.rounds.partial(),
+                u32::from_le_bytes(params.alpha.to_bytes_le()).into(),
+                params.mds.0 .0.into_nested_vec(),
+                params.arc.0.into_nested_vec(),
+                2,
+                1,
+            )
+        };
+        Self {
+            leaf_crh_params,
+            two_to_one_crh_params,
+        }
+    }
+}
+
+pub trait MatrixExt {
+    fn into_nested_vec(self) -> Vec<Vec<Fq>>;
+}
+
+impl<const N_ROWS: usize, const N_COLS: usize, const N_ELEMENTS: usize> MatrixExt
+    for Matrix<N_ROWS, N_COLS, N_ELEMENTS>
+{
+    fn into_nested_vec(self) -> Vec<Vec<Fq>> {
+        self.elements
+            .chunks(N_COLS)
+            .map(|row| row.to_vec())
+            .collect()
+    }
 }
 
 #[cfg(test)]
@@ -80,9 +138,21 @@ fn check_satisfaction(
         }
     }
 
-    for (note, auth_path) in private.input_notes.iter().zip(private.input_notes_proofs.iter()) {
-        let note_path_valid = auth_path.verify(&public.leaf_crh_params, &public.two_to_one_crh_params, &public.root, [note.commit().0]);
-        anyhow::ensure!(note_path_valid.is_ok(), format!("couldn't verify note auth path for note {:?}", note))
+    for (note, auth_path) in private
+        .input_notes
+        .iter()
+        .zip(private.input_notes_proofs.iter())
+    {
+        let note_path_valid = auth_path.verify(
+            &public.leaf_crh_params,
+            &public.two_to_one_crh_params,
+            &public.root,
+            [note.commit().0],
+        );
+        anyhow::ensure!(
+            note_path_valid.is_ok(),
+            format!("couldn't verify note auth path for note {:?}", note)
+        )
     }
 
     for notes in private.input_notes.windows(2) {
@@ -339,31 +409,26 @@ impl DummyWitness for SettlementCircuit {
 
         // Enter duplicate commit to satisfy the need for >1 leaves in the `MerkleTree::new` function
         let leaves: Vec<[Fq; 1]> = vec![[note.commit().0]];
- 
+
         // Build tree with our one dummy note in order to get the merkle root value
-        let tree = Poseidon377MerkleTree::new(
-            &leaf_crh_params,
-            &two_to_one_crh_params,
-            leaves.clone(),
-        )
-        .unwrap();
- 
+        let tree =
+            Poseidon377MerkleTree::new(&leaf_crh_params, &two_to_one_crh_params, leaves.clone())
+                .unwrap();
+
         // Get auth path from 0th leaf to root
-        let auth_path = tree.generate_proof(4).unwrap(); 
+        let auth_path = tree.generate_proof(4).unwrap();
 
         let public = SettlementProofPublic {
             output_notes_commitments: vec![note.commit()],
             nullifiers: vec![Nullifier::derive(&note)],
-            leaf_crh_params,
-            two_to_one_crh_params,
             leaves: vec![leaves[0]], // dont include the duplicate leaf
-            root: tree.root()
+            root: tree.root(),
         };
         let private = SettlementProofPrivate {
             output_notes: vec![note.clone()],
             input_notes: vec![note],
             setoff_amount: Amount::zero(),
-            input_notes_proofs: vec![auth_path]
+            input_notes_proofs: vec![auth_path],
         };
 
         SettlementCircuit { public, private }
@@ -540,9 +605,9 @@ mod tests {
                 leaves.clone(),
             )
             .unwrap();
-    
+
             // Get auth path from 0th leaf to root (input note)
-            let input_auth_path = tree.generate_proof(0).unwrap(); 
+            let input_auth_path = tree.generate_proof(0).unwrap();
 
             let public = SettlementProofPublic { output_notes_commitments: vec![output_note_commitment], nullifiers: vec![input_note_nullifier], leaf_crh_params, two_to_one_crh_params, root: tree.root(), leaves: vec![leaves[0]]};
             let private = SettlementProofPrivate { output_notes: vec![output_note], input_notes: vec![input_note], setoff_amount: Amount::from(setoff_amount), input_notes_proofs: vec![input_auth_path]};
@@ -611,9 +676,9 @@ mod tests {
                 leaves.clone(),
             )
             .unwrap();
-    
+
             // Get auth path from 0th leaf to root (input note)
-            let input_auth_path = tree.generate_proof(0).unwrap(); 
+            let input_auth_path = tree.generate_proof(0).unwrap();
 
             let bad_public = SettlementProofPublic { output_notes_commitments: vec![incorrect_note_commitment], nullifiers: vec![nullifier], root: tree.root(), leaves, leaf_crh_params, two_to_one_crh_params};
             let private = SettlementProofPrivate { output_notes: vec![note], input_notes: vec![], setoff_amount: Amount::zero(), input_notes_proofs: vec![input_auth_path]};

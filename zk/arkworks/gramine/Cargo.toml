@@ -6,13 +6,14 @@ edition = "2021"
 [dependencies]
 anyhow                           = { version = "1.0.94", default-features = false }
 ark-crypto-primitives            = { version = "0.4.0", default-features = false, features = ["merkle_tree", "r1cs"] }
-# arkworks-merkle-tree             = { git = "https://github.com/hu55a1n1/arkworks-merkle-tree.git", branch = "dangush/poseiden" }
+arkworks-merkle-tree             = { git = "https://github.com/hu55a1n1/arkworks-merkle-tree.git", branch = "dangush/poseiden" }
 ark-ff                           = { version = "0.4.0", default-features = false }
 ark-groth16                      = { version = "0.4.0", default-features = false }
 ark-serialize                    = { version = "0.4.0", default-features = false, features = ["derive"] }
 ark-r1cs-std                     = { version = "0.4.0", default-features = false }
 ark-relations                    = { version = "0.4.0", default-features = false }
 ark-snark                        = { version = "0.4.0", default-features = false }
+ark-std                          = { version = "0.5.0" }
 base64                           = { version = "0.21.7", default-features = false }
 blake2b_simd                     = { version = "1.0.2", default-features = false }
 decaf377                         = { version = "0.10.1" }
@@ -28,13 +29,10 @@ penumbra-proto                   = { git = "https://github.com/penumbra-zone/pen
 penumbra-shielded-pool           = { git = "https://github.com/penumbra-zone/penumbra.git", tag = "v0.80.9" }
 penumbra-tct                     = { git = "https://github.com/penumbra-zone/penumbra.git", tag = "v0.80.9" }
 poseidon377                      = { version = "1.2.0", default-features = false }
+poseidon-parameters              = { version = "1.1.0" }
 rand_core                        = { version = "0.6.4", default-features = false }
 serde                            = { version = "1.0.216", features = ["derive"], default-features = false }
 tracing                          = { version = "0.1.41", default-features = false }
-
-arkworks-merkle-tree = { path = "../../../../arkworks-merkle-tree" }
-ark-std = "0.5.0" # Only used for temporary random poseidon param generation
-# decaf377-fork = { path = "../../../../decaf377", package = "decaf377"}
 
 [dev-dependencies]
 proptest                         = { version = "1" }
