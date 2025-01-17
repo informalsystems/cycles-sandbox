@@ -2,6 +2,8 @@ use std::cmp::Ordering;
 use std::str::FromStr;
 
 use anyhow::Result;
+use ark_crypto_primitives::crh::poseidon::constraints::CRHParametersVar;
+use ark_crypto_primitives::sponge::poseidon::PoseidonConfig;
 use ark_ff::ToConstraintField;
 use ark_groth16::r1cs_to_qap::LibsnarkReduction;
 use ark_groth16::{Groth16, PreparedVerifyingKey, Proof, ProvingKey};
@@ -9,6 +11,10 @@ use ark_r1cs_std::prelude::*;
 use ark_relations::r1cs::{ConstraintSynthesizer, ConstraintSystemRef, SynthesisError};
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_snark::SNARK;
+use arkworks_merkle_tree::poseidontree::{
+    LeafHashParams, Poseidon377MerklePath, Poseidon377MerklePathVar, Poseidon377MerkleTree, Root,
+    RootVar, TwoToOneHashParams,
+};
 use base64::prelude::*;
 use decaf377::{Bls12_377, Fq};
 use decaf377_fmd as fmd;
@@ -25,11 +31,6 @@ use poseidon_parameters::v1::Matrix;
 
 use crate::note::{r1cs::NoteVar, Note};
 use crate::nullifier::{Nullifier, NullifierVar};
-
-use ark_crypto_primitives::sponge::poseidon::PoseidonConfig;
-use arkworks_merkle_tree::poseidontree::{
-    LeafHashParams, Poseidon377MerklePath, Poseidon377MerkleTree, Root, TwoToOneHashParams,
-};
 
 /// The public input for an [`SettlementProof`].
 #[derive(Clone, Debug)]
@@ -210,11 +211,7 @@ fn check_circuit_satisfaction(
     use ark_relations::r1cs::{self, ConstraintSystem};
 
     let cs = ConstraintSystem::new_ref();
-    let circuit = SettlementCircuit {
-        public,
-        private,
-        constants: Default::default(),
-    };
+    let circuit = SettlementCircuit { public, private };
     cs.set_optimization_goal(r1cs::OptimizationGoal::Constraints);
     circuit
         .generate_constraints(cs.clone())
@@ -230,16 +227,11 @@ fn check_circuit_satisfaction(
 pub struct SettlementCircuit {
     public: SettlementProofPublic,
     private: SettlementProofPrivate,
-    constants: SettlementProofConst,
 }
 
 impl SettlementCircuit {
     fn new(public: SettlementProofPublic, private: SettlementProofPrivate) -> Self {
-        Self {
-            public,
-            private,
-            constants: Default::default(),
-        }
+        Self { public, private }
     }
 }
 
@@ -279,6 +271,37 @@ impl ConstraintSynthesizer<Fq> for SettlementCircuit {
 
             let nullifier_var = NullifierVar::derive(&note_var)?;
             nullifier_var.enforce_equal(&claimed_nullifier_var)?;
+        }
+
+        let constants = SettlementProofConst::default();
+
+        for (note, auth_path) in self
+            .private
+            .input_notes
+            .iter()
+            .zip(self.private.input_notes_proofs.iter())
+        {
+            let path_var =
+                Poseidon377MerklePathVar::new_witness(ark_relations::ns!(cs, "path_var"), || {
+                    Ok(auth_path)
+                })?;
+
+            let note_var = NoteVar::new_witness(cs.clone(), || Ok(note.clone()))?;
+            let root_var = RootVar::new_input(cs.clone(), || Ok(self.public.root.clone()))?;
+
+            // Then, we allocate the public parameters as constants:
+            let leaf_crh_params_var =
+                CRHParametersVar::new_constant(cs.clone(), &constants.leaf_crh_params)?;
+            let two_to_one_crh_params_var =
+                CRHParametersVar::new_constant(cs.clone(), &constants.two_to_one_crh_params)?;
+
+            let is_member = path_var.verify_membership(
+                &leaf_crh_params_var,
+                &two_to_one_crh_params_var,
+                &root_var,
+                &[note_var.commit()?.inner],
+            )?;
+            is_member.enforce_equal(&Boolean::TRUE)?;
         }
 
         fn enforce_equal_addresses(
@@ -415,11 +438,7 @@ impl DummyWitness for SettlementCircuit {
             input_notes_proofs: vec![auth_path],
         };
 
-        SettlementCircuit {
-            public,
-            private,
-            constants: Default::default(),
-        }
+        SettlementCircuit { public, private }
     }
 }
 
