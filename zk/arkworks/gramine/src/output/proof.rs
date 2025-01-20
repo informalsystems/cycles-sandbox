@@ -69,6 +69,10 @@ fn check_satisfaction(public: &OutputProofPublic, private: &OutputProofPrivate) 
         anyhow::bail!("transmission key did not match note");
     }
 
+    if private.note.diversified_generator() == decaf377::Element::default() {
+        anyhow::bail!("diversified generator is identity");
+    }
+
     if private.ak.is_identity() {
         anyhow::bail!("ak is identity");
     }
