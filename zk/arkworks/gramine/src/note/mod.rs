@@ -1,5 +1,6 @@
 use decaf377::Fq;
 use decaf377_fmd as fmd;
+use decaf377_ka as ka;
 use once_cell::sync::Lazy;
 use penumbra_asset::{asset, Value};
 use penumbra_keys::Address;
@@ -32,6 +33,12 @@ pub struct Note {
     /// the curve point until it is used, since validation is not free).
     transmission_key_s: Fq,
     creditor_transmission_key_s: Fq,
+}
+
+impl Note {
+    pub fn transmission_key(&self) -> &ka::Public {
+        self.debtor.transmission_key()
+    }
 }
 
 impl Note {

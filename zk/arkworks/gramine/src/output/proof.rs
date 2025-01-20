@@ -4,20 +4,20 @@ use std::str::FromStr;
 use anyhow::Result;
 use ark_groth16::r1cs_to_qap::LibsnarkReduction;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
-use decaf377::{Bls12_377, Fq};
-use decaf377_fmd as fmd;
-use decaf377_ka as ka;
+use decaf377::{Bls12_377, Fq, Fr};
+use decaf377_rdsa::{SpendAuth, VerificationKey};
 
 use ark_ff::ToConstraintField;
 use ark_groth16::{Groth16, PreparedVerifyingKey, Proof, ProvingKey};
 use ark_r1cs_std::prelude::*;
 use ark_relations::r1cs::{ConstraintSynthesizer, ConstraintSystemRef};
 use ark_snark::SNARK;
-use penumbra_keys::{keys::Diversifier, Address};
+use penumbra_keys::{Address, FullViewingKey};
 use penumbra_proto::{penumbra::core::component::shielded_pool::v1 as pb, DomainType};
 use penumbra_tct::r1cs::StateCommitmentVar;
 
 use penumbra_asset::Value;
+use penumbra_keys::keys::{Bip44Path, NullifierKey, SeedPhrase, SpendKey};
 use penumbra_proof_params::{DummyWitness, VerifyingKeyExt, GROTH16_PROOF_LENGTH_BYTES};
 use penumbra_shielded_pool::{note::StateCommitment, Rseed};
 
@@ -28,6 +28,8 @@ use crate::note::{r1cs::NoteVar, Note};
 pub struct OutputProofPublic {
     /// A hiding commitment to the note.
     pub note_commitment: StateCommitment,
+    /// the randomized verification spend key.
+    pub rk: VerificationKey<SpendAuth>,
 }
 
 /// The private input for an [`OutputProof`].
@@ -35,6 +37,13 @@ pub struct OutputProofPublic {
 pub struct OutputProofPrivate {
     /// The note being created.
     pub note: Note,
+    /// The randomizer used for generating the randomized spend auth key.
+    pub spend_auth_randomizer: Fr,
+    /// The spend authorization key.
+    pub ak: VerificationKey<SpendAuth>,
+    /// The nullifier deriving key.
+    // We only need this to check that the rk matches the note being committed to
+    pub nk: NullifierKey,
 }
 
 #[cfg(test)]
@@ -46,6 +55,22 @@ fn check_satisfaction(public: &OutputProofPublic, private: &OutputProofPrivate) 
     let note_commitment = private.note.commit();
     if note_commitment != public.note_commitment {
         anyhow::bail!("note commitment did not match public input");
+    }
+
+    let rk = private.ak.randomize(&private.spend_auth_randomizer);
+    if rk != public.rk {
+        anyhow::bail!("randomized spend auth key did not match public input");
+    }
+
+    let fvk = FullViewingKey::from_components(private.ak, private.nk);
+    let ivk = fvk.incoming();
+    let transmission_key = ivk.diversified_public(&private.note.diversified_generator());
+    if transmission_key != *private.note.transmission_key() {
+        anyhow::bail!("transmission key did not match note");
+    }
+
+    if private.ak.is_identity() {
+        anyhow::bail!("ak is identity");
     }
 
     Ok(())
@@ -111,16 +136,18 @@ impl ConstraintSynthesizer<Fq> for OutputCircuit {
 
 impl DummyWitness for OutputCircuit {
     fn with_dummy_witness() -> Self {
-        let diversifier_bytes = [1u8; 16];
-        let pk_d_bytes = decaf377::Element::GENERATOR.vartime_compress().0;
-        let clue_key_bytes = [1; 32];
-        let diversifier = Diversifier(diversifier_bytes);
-        let address = Address::from_components(
-            diversifier,
-            ka::Public(pk_d_bytes),
-            fmd::ClueKey(clue_key_bytes),
-        )
-        .expect("generated 1 address");
+        let seed_phrase = SeedPhrase::from_randomness(&[b'f'; 32]);
+        let sk_sender = SpendKey::from_seed_phrase_bip44(seed_phrase, &Bip44Path::new(0));
+        let fvk_sender = sk_sender.full_viewing_key();
+        let ivk_sender = fvk_sender.incoming();
+        let (address, _dtk_d) = ivk_sender.payment_address(0u32.into());
+
+        let spend_auth_randomizer = Fr::from(1u64);
+        let rsk = sk_sender.spend_auth_key().randomize(&spend_auth_randomizer);
+        let rk: VerificationKey<SpendAuth> = rsk.into();
+        let nk = *sk_sender.nullifier_key();
+        let ak = sk_sender.spend_auth_key().into();
+
         let note = Note::from_parts(
             address.clone(),
             address, // fixme: this should be a different address
@@ -131,8 +158,14 @@ impl DummyWitness for OutputCircuit {
 
         let public = OutputProofPublic {
             note_commitment: note.commit(),
+            rk,
         };
-        let private = OutputProofPrivate { note };
+        let private = OutputProofPrivate {
+            note,
+            spend_auth_randomizer,
+            ak,
+            nk,
+        };
         OutputCircuit { public, private }
     }
 }
@@ -238,13 +271,15 @@ mod tests {
             .boxed()
     }
 
-    fn address_from_seed(seed_phrase_randomness: &[u8], index: u32) -> Address {
+    fn addr_from_sk(sk: &SpendKey, index: u32) -> Address {
+        let fvk = sk.full_viewing_key();
+        let ivk = fvk.incoming();
+        ivk.payment_address(index.into()).0
+    }
+
+    fn sk_from_seed(seed_phrase_randomness: &[u8]) -> SpendKey {
         let seed_phrase = SeedPhrase::from_randomness(&seed_phrase_randomness);
-        let sk_recipient = SpendKey::from_seed_phrase_bip44(seed_phrase, &Bip44Path::new(0));
-        let fvk_recipient = sk_recipient.full_viewing_key();
-        let ivk_recipient = fvk_recipient.incoming();
-        let (dest, _dtk_d) = ivk_recipient.payment_address(index.into());
-        dest
+        SpendKey::from_seed_phrase_bip44(seed_phrase, &Bip44Path::new(0))
     }
 
     prop_compose! {
@@ -257,23 +292,30 @@ mod tests {
             address_index_1 in any::<u32>(),
             address_index_2 in any::<u32>()
         ) -> (OutputProofPublic, OutputProofPrivate) {
-            let dest_debtor = address_from_seed(&seed_phrase_randomness_1, address_index_1);
-            let dest_creditor = address_from_seed(&seed_phrase_randomness_2, address_index_2);
+            let sk_debtor = sk_from_seed(&seed_phrase_randomness_1);
+            let debtor_addr = addr_from_sk(&sk_debtor, address_index_1);
+            let spend_auth_randomizer = Fr::from(1u64);
+            let rk_debtor = sk_debtor.spend_auth_key().randomize(&spend_auth_randomizer).into();
+            let ak = sk_debtor.spend_auth_key().into();
+            let nk = *sk_debtor.nullifier_key();
+
+            let sk_creditor = sk_from_seed(&seed_phrase_randomness_2);
+            let creditor_addr = addr_from_sk(&sk_creditor, address_index_2);
 
             let value_to_send = Value {
                 amount: Amount::from(amount),
                 asset_id: asset::Id(Fq::from(asset_id64)),
             };
             let note = Note::from_parts(
-                dest_debtor,
-                dest_creditor,
+                debtor_addr,
+                creditor_addr,
                 value_to_send,
                 Rseed(rseed_randomness),
             ).expect("should be able to create note");
             let note_commitment = note.commit();
 
-            let public = OutputProofPublic { note_commitment };
-            let private = OutputProofPrivate { note };
+            let public = OutputProofPublic { note_commitment, rk: rk_debtor };
+            let private = OutputProofPrivate { note, spend_auth_randomizer, ak, nk };
 
             (public, private)
         }
@@ -300,16 +342,23 @@ mod tests {
             address_index_2 in any::<u32>(),
             incorrect_note_blinding in fq_strategy()
         ) -> (OutputProofPublic, OutputProofPrivate) {
-            let dest_debtor = address_from_seed(&seed_phrase_randomness_1, address_index_1);
-            let dest_creditor = address_from_seed(&seed_phrase_randomness_2, address_index_2);
+            let sk_debtor = sk_from_seed(&seed_phrase_randomness_1);
+            let debtor_addr = addr_from_sk(&sk_debtor, address_index_1);
+            let spend_auth_randomizer = Fr::from(1u64);
+            let rk = sk_debtor.spend_auth_key().randomize(&spend_auth_randomizer).into();
+            let ak = sk_debtor.spend_auth_key().into();
+            let nk = *sk_debtor.nullifier_key();
+
+            let sk_creditor = sk_from_seed(&seed_phrase_randomness_2);
+            let creditor_addr = addr_from_sk(&sk_creditor, address_index_2);
 
             let value_to_send = Value {
                 amount: Amount::from(amount),
                 asset_id: asset::Id(Fq::from(asset_id64)),
             };
             let note = Note::from_parts(
-                dest_debtor,
-                dest_creditor,
+                debtor_addr,
+                creditor_addr,
                 value_to_send,
                 Rseed(rseed_randomness),
             ).expect("should be able to create note");
@@ -323,8 +372,8 @@ mod tests {
                 note.creditor().transmission_key_s().clone()
             );
 
-            let bad_public = OutputProofPublic { note_commitment: incorrect_note_commitment };
-            let private = OutputProofPrivate { note };
+            let bad_public = OutputProofPublic { note_commitment: incorrect_note_commitment, rk };
+            let private = OutputProofPrivate { note, spend_auth_randomizer, ak, nk };
 
             (bad_public, private)
         }
