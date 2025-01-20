@@ -17,7 +17,10 @@ use penumbra_proto::{penumbra::core::component::shielded_pool::v1 as pb, DomainT
 use penumbra_tct::r1cs::StateCommitmentVar;
 
 use penumbra_asset::Value;
-use penumbra_keys::keys::{Bip44Path, NullifierKey, SeedPhrase, SpendKey};
+use penumbra_keys::keys::{
+    AuthorizationKeyVar, Bip44Path, IncomingViewingKeyVar, NullifierKey, NullifierKeyVar,
+    RandomizedVerificationKey, SeedPhrase, SpendAuthRandomizerVar, SpendKey,
+};
 use penumbra_proof_params::{DummyWitness, VerifyingKeyExt, GROTH16_PROOF_LENGTH_BYTES};
 use penumbra_shielded_pool::{note::StateCommitment, Rseed};
 
@@ -126,13 +129,32 @@ impl ConstraintSynthesizer<Fq> for OutputCircuit {
         // Note: In the allocation of the address on `NoteVar`, we check the diversified base is not identity.
         let note_var = NoteVar::new_witness(cs.clone(), || Ok(self.private.note.clone()))?;
 
+        let spend_auth_randomizer_var = SpendAuthRandomizerVar::new_witness(cs.clone(), || {
+            Ok(self.private.spend_auth_randomizer)
+        })?;
+        // Note: in the allocation of `AuthorizationKeyVar` we check it is not identity.
+        let ak_element_var: AuthorizationKeyVar =
+            AuthorizationKeyVar::new_witness(cs.clone(), || Ok(self.private.ak))?;
+        let nk_var = NullifierKeyVar::new_witness(cs.clone(), || Ok(self.private.nk))?;
+
         // Public inputs
         let claimed_note_commitment =
             StateCommitmentVar::new_input(cs.clone(), || Ok(self.public.note_commitment))?;
+        let rk_var = RandomizedVerificationKey::new_input(cs.clone(), || Ok(self.public.rk))?;
 
         // Note commitment integrity
         let note_commitment = note_var.commit()?;
         note_commitment.enforce_equal(&claimed_note_commitment)?;
+
+        // Check integrity of randomized verification key.
+        let computed_rk_var = ak_element_var.randomize(&spend_auth_randomizer_var)?;
+        computed_rk_var.enforce_equal(&rk_var)?;
+
+        // Check integrity of diversified address.
+        let ivk = IncomingViewingKeyVar::derive(&nk_var, &ak_element_var)?;
+        let computed_transmission_key =
+            ivk.diversified_public(&note_var.diversified_generator())?;
+        computed_transmission_key.enforce_equal(&note_var.transmission_key())?;
 
         Ok(())
     }
