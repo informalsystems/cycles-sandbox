@@ -26,6 +26,7 @@ penumbra-asset                   = { git = "https://github.com/penumbra-zone/pen
 penumbra-keys                    = { git = "https://github.com/penumbra-zone/penumbra.git", tag = "v0.80.9" }
 penumbra-num                     = { git = "https://github.com/penumbra-zone/penumbra.git", tag = "v0.80.9" }
 penumbra-proof-params            = { git = "https://github.com/penumbra-zone/penumbra.git", tag = "v0.80.9" }
+penumbra-proof-setup            = { git = "https://github.com/penumbra-zone/penumbra.git", tag = "v0.80.9" }
 penumbra-proto                   = { git = "https://github.com/penumbra-zone/penumbra.git", tag = "v0.80.9" }
 penumbra-shielded-pool           = { git = "https://github.com/penumbra-zone/penumbra.git", tag = "v0.80.9" }
 penumbra-tct                     = { git = "https://github.com/penumbra-zone/penumbra.git", tag = "v0.80.9" }

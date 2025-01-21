@@ -1,15 +1,20 @@
-use ark_groth16::ProvingKey;
-use ark_serialize::CanonicalDeserialize;
-use decaf377::{Fq, Fr};
-use penumbra_asset::{asset, Balance, Value};
-use penumbra_keys::keys::{Bip44Path, SeedPhrase, SpendKey};
-use penumbra_shielded_pool::{
-    output::{OutputProofPrivate, OutputProofPublic},
-    Note, OutputProof,
+use anyhow::Error;
+use ark_groth16::{ProvingKey, VerifyingKey};
+use ark_serialize::CanonicalSerialize;
+use decaf377::Bls12_377;
+use penumbra_proof_params::{
+    generate_constraint_matrices, DummyWitness, ProvingKeyExt, VerifyingKeyExt,
+};
+use penumbra_proof_setup::single::{
+    circuit_degree, combine, log::Hashable, transition, Phase1CRSElements, Phase1Contribution,
+    Phase2Contribution,
 };
 use rand_core::OsRng;
+use std::fs;
+use std::io::BufWriter;
+use std::path::PathBuf;
 
-const OUTPUT_PROOF_PROVING_KEY: &[u8] = include_bytes!("../data/output_pk.bin");
+use crate::output::OutputCircuit;
 
 pub mod note;
 pub mod nullifier;
@@ -17,63 +22,84 @@ pub mod output;
 pub mod proof_bundle;
 pub mod settlement;
 
-fn main() {
-    let pk = ProvingKey::deserialize_uncompressed_unchecked(OUTPUT_PROOF_PROVING_KEY)
-        .expect("can serialize");
+fn generate_parameters<D: DummyWitness>() -> (ProvingKey<Bls12_377>, VerifyingKey<Bls12_377>) {
+    let matrices = generate_constraint_matrices::<D>();
 
-    let (public, private) = {
-        let mut rng = OsRng;
+    let mut rng = OsRng;
 
-        let seed_phrase = SeedPhrase::generate(OsRng);
-        let sk_recipient = SpendKey::from_seed_phrase_bip44(seed_phrase, &Bip44Path::new(0));
-        let fvk_recipient = sk_recipient.full_viewing_key();
-        let ivk_recipient = fvk_recipient.incoming();
-        let (dest, _dtk_d) = ivk_recipient.payment_address(0u32.into());
+    let degree = circuit_degree(&matrices).expect("failed to calculate degree of circuit");
+    let phase1root = Phase1CRSElements::root(degree);
 
-        let value_to_send = Value {
-            amount: 1u64.into(),
-            asset_id: asset::Cache::with_known_assets()
-                .get_unit("upenumbra")
-                .unwrap()
-                .id(),
-        };
-        let balance_blinding = Fr::rand(&mut OsRng);
-
-        let note = Note::generate(&mut rng, &dest, value_to_send);
-        let note_commitment = note.commit();
-        let balance_commitment = (-Balance::from(value_to_send)).commit(balance_blinding);
-
-        let public = OutputProofPublic {
-            balance_commitment,
-            note_commitment,
-        };
-        let private = OutputProofPrivate {
-            note,
-            balance_blinding,
-        };
-
-        (public, private)
-    };
-
-    let blinding_r = Fq::rand(&mut OsRng);
-    let blinding_s = Fq::rand(&mut OsRng);
-    let proof = OutputProof::prove(blinding_r, blinding_s, &pk, public.clone(), private)
-        .expect("can create proof");
-
-    let proof_bundle = proof_bundle::Groth16ProofBundle::new_from_output_proof(proof, public)
-        .expect("public inputs cannot be converted to valid field elements");
-    println!(
-        "proof: {}",
-        hex::encode(to_canonical_bytes(proof_bundle.proof))
+    // Doing two contributions to make sure there's not some weird bug there
+    let phase1contribution = Phase1Contribution::make(&mut rng, phase1root.hash(), &phase1root);
+    let phase1contribution = Phase1Contribution::make(
+        &mut rng,
+        phase1contribution.hash(),
+        &phase1contribution.new_elements,
     );
-    println!(
-        "public_inputs: {}",
-        hex::encode(to_canonical_bytes(proof_bundle.public_inputs))
+
+    let (extra, phase2root) = transition(&phase1contribution.new_elements, &matrices)
+        .expect("failed to transition between setup phases");
+
+    let phase2contribution = Phase2Contribution::make(&mut rng, phase2root.hash(), &phase2root);
+    let phase2contribution = Phase2Contribution::make(
+        &mut rng,
+        phase2contribution.hash(),
+        &phase2contribution.new_elements,
     );
+
+    let pk = combine(
+        &matrices,
+        &phase1contribution.new_elements,
+        &phase2contribution.new_elements,
+        &extra,
+    );
+
+    let vk = pk.vk.clone();
+
+    (pk, vk)
 }
 
-fn to_canonical_bytes(t: impl ark_serialize::CanonicalSerialize) -> Vec<u8> {
-    let mut out = Vec::new();
-    t.serialize_compressed(&mut out).expect("can serialize");
-    out
+fn main() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    println!("{}", root.display());
+    let target_dir = root.join("gen");
+    println!("{}", target_dir.display());
+
+    let (output_pk, output_vk) = generate_parameters::<OutputCircuit>();
+    write_params(&target_dir, "output", &output_pk, &output_vk).expect("write failure");
+}
+
+fn write_params(
+    target_dir: &PathBuf,
+    name: &str,
+    pk: &ProvingKey<Bls12_377>,
+    vk: &VerifyingKey<Bls12_377>,
+) -> Result<(), Error> {
+    let pk_location = target_dir.join(format!("{}_pk.bin", name));
+    let vk_location = target_dir.join(format!("{}_vk.param", name));
+    let id_location = target_dir.join(format!("{}_id.rs", name));
+
+    let pk_file = fs::File::create(&pk_location)?;
+    let vk_file = fs::File::create(&vk_location)?;
+
+    let pk_writer = BufWriter::new(pk_file);
+    let vk_writer = BufWriter::new(vk_file);
+
+    ProvingKey::serialize_uncompressed(pk, pk_writer).expect("can serialize ProvingKey");
+    VerifyingKey::serialize_uncompressed(vk, vk_writer).expect("can serialize VerifyingKey");
+
+    let pk_id = pk.debug_id();
+    let vk_id = vk.debug_id();
+    std::fs::write(
+        id_location,
+        format!(
+            r#"
+pub const PROVING_KEY_ID: &'static str = "{pk_id}";
+pub const VERIFICATION_KEY_ID: &'static str = "{vk_id}";
+"#,
+        ),
+    )?;
+
+    Ok(())
 }
