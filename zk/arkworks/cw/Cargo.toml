@@ -1,0 +1,57 @@
+[package]
+name = "zk-cw"
+version = "0.1.0"
+authors = ["Shoaib Ahmed <sufialhussaini@gmail.com>"]
+edition = "2021"
+resolver = "2"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[profile.release]
+opt-level = 3
+debug = false
+rpath = false
+lto = true
+debug-assertions = false
+codegen-units = 1
+panic = 'abort'
+incremental = false
+overflow-checks = true
+
+[features]
+# use library feature to disable all instantiate/execute/query exports
+library = []
+
+[package.metadata.scripts]
+optimize = """docker run --rm -v "$(pwd)":/code \
+  --mount type=volume,source="$(basename "$(pwd)")_cache",target=/target \
+  --mount type=volume,source=registry_cache,target=/usr/local/cargo/registry \
+  cosmwasm/optimizer:0.15.0
+"""
+
+[dependencies]
+cosmwasm-schema = { default-features = false, version = "2.1.0" }
+cosmwasm-std = { version = "2.1.0", default-features = false, features = [
+    "cosmwasm_1_4",
+    # Enable this if you only deploy to chains that have CosmWasm 2.0 or higher
+#     "cosmwasm_2_0",
+] }
+cw-storage-plus = { default-features = false, version = "2.0.0" }
+cw2 = { default-features = false, version = "2.0.0" }
+
+ark-serialize = { version = "0.4.0", default-features = false }
+ark-groth16 = { version = "0.4.0", default-features = false }
+ark-snark = { version = "0.4.0", default-features = false }
+ark-relations = { version = "0.4.0", default-features = false }
+decaf377 = { version = "0.10.1", default-features = false, features = ["arkworks"] }
+decaf377-rdsa = { version = "0.11.0", default-features = false }
+poseidon377 = { version = "1.2.0", default-features = false }
+
+[dev-dependencies]
+
+[patch.crates-io]
+decaf377 = { git = "https://github.com/hu55a1n1/decaf377.git" }
+#decaf377-rdsa = { git = "https://github.com/hu55a1n1/decaf377-rdsa.git" }
