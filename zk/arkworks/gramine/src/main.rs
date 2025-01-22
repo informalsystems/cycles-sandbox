@@ -1,6 +1,7 @@
 use anyhow::Error;
 use ark_groth16::{ProvingKey, VerifyingKey};
 use ark_serialize::CanonicalSerialize;
+use arkworks_gramine::settlement::SettlementCircuit;
 use decaf377::Bls12_377;
 use penumbra_proof_params::{
     generate_constraint_matrices, DummyWitness, ProvingKeyExt, VerifyingKeyExt,
@@ -15,12 +16,7 @@ use std::io::BufWriter;
 use std::path::PathBuf;
 
 use crate::output::OutputCircuit;
-
-pub mod note;
-pub mod nullifier;
-pub mod output;
-pub mod proof_bundle;
-pub mod settlement;
+use arkworks_gramine::output;
 
 fn generate_parameters<D: DummyWitness>() -> (ProvingKey<Bls12_377>, VerifyingKey<Bls12_377>) {
     let matrices = generate_constraint_matrices::<D>();
@@ -66,8 +62,11 @@ fn main() {
     let target_dir = root.join("gen");
     println!("{}", target_dir.display());
 
-    let (output_pk, output_vk) = generate_parameters::<OutputCircuit>();
-    write_params(&target_dir, "output", &output_pk, &output_vk).expect("write failure");
+    // let (output_pk, output_vk) = generate_parameters::<OutputCircuit>();
+    // write_params(&target_dir, "output", &output_pk, &output_vk).expect("write failure");
+
+    let (settlement_pk, settlement_vk) = generate_parameters::<SettlementCircuit>();
+    write_params(&target_dir, "settlement", &settlement_pk, &settlement_vk).expect("write failure");
 }
 
 fn write_params(
