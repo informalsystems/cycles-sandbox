@@ -1,3 +1,7 @@
+use std::fs;
+use std::io::BufWriter;
+use std::path::{Path, PathBuf};
+
 use anyhow::Error;
 use ark_groth16::{ProvingKey, VerifyingKey};
 use ark_serialize::CanonicalSerialize;
@@ -10,9 +14,6 @@ use penumbra_proof_setup::single::{
     Phase2Contribution,
 };
 use rand_core::OsRng;
-use std::fs;
-use std::io::BufWriter;
-use std::path::PathBuf;
 
 use crate::output::OutputCircuit;
 
@@ -71,7 +72,7 @@ fn main() {
 }
 
 fn write_params(
-    target_dir: &PathBuf,
+    target_dir: &Path,
     name: &str,
     pk: &ProvingKey<Bls12_377>,
     vk: &VerifyingKey<Bls12_377>,

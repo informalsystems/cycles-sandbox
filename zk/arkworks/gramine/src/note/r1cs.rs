@@ -116,3 +116,20 @@ impl NoteVar {
         Ok(StateCommitmentVar { inner: commitment })
     }
 }
+
+pub fn enforce_equal_addresses(
+    addr1: &AddressVar,
+    addr2: &AddressVar,
+) -> anyhow::Result<(), SynthesisError> {
+    let AddressVar {
+        diversified_generator,
+        transmission_key,
+        clue_key,
+    } = addr1;
+    addr2
+        .diversified_generator
+        .enforce_equal(diversified_generator)?;
+    addr2.transmission_key.enforce_equal(transmission_key)?;
+    addr2.clue_key.enforce_equal(clue_key)?;
+    Ok(())
+}

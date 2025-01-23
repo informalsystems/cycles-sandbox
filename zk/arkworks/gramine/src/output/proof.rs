@@ -12,7 +12,6 @@ use ark_groth16::{Groth16, PreparedVerifyingKey, Proof, ProvingKey};
 use ark_r1cs_std::prelude::*;
 use ark_relations::r1cs::{ConstraintSynthesizer, ConstraintSystemRef};
 use ark_snark::SNARK;
-use penumbra_keys::{Address, FullViewingKey};
 use penumbra_proto::{penumbra::core::component::shielded_pool::v1 as pb, DomainType};
 use penumbra_tct::r1cs::StateCommitmentVar;
 
@@ -21,6 +20,7 @@ use penumbra_keys::keys::{
     AuthorizationKeyVar, Bip44Path, IncomingViewingKeyVar, NullifierKey, NullifierKeyVar,
     RandomizedVerificationKey, SeedPhrase, SpendAuthRandomizerVar, SpendKey,
 };
+use penumbra_keys::FullViewingKey;
 use penumbra_proof_params::{DummyWitness, VerifyingKeyExt, GROTH16_PROOF_LENGTH_BYTES};
 use penumbra_shielded_pool::{note::StateCommitment, Rseed};
 
@@ -288,6 +288,7 @@ mod tests {
     use decaf377::Fq;
     use penumbra_asset::{asset, Value};
     use penumbra_keys::keys::{Bip44Path, SeedPhrase, SpendKey};
+    use penumbra_keys::Address;
     use penumbra_num::Amount;
     use proptest::prelude::*;
 
