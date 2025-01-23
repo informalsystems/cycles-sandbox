@@ -665,25 +665,51 @@ mod tests {
                 amount: Amount::from(amount),
                 asset_id: asset::Id(Fq::from(asset_id64)),
             };
-            let note = Note::from_parts(
-                dest_debtor,
-                dest_creditor,
+            let input_note_1 = Note::from_parts(
+                dest_debtor.clone(),
+                dest_creditor.clone(),
                 value_to_send,
                 Rseed(rseed_randomness),
             ).expect("should be able to create note");
-            let nullifier = Nullifier::derive(&note);
+            let input_note_nullifier_1 = Nullifier::derive(&input_note_1);
 
-            let incorrect_note_commitment = commitment(
+            let input_note_2 = Note::from_parts(
+                dest_creditor.clone(),
+                dest_debtor.clone(),
+                value_to_send,
+                Rseed(rseed_randomness),
+            ).expect("should be able to create note");
+            let input_note_nullifier_2 = Nullifier::derive(&input_note_2);
+
+            let setoff_amount = amount;
+            let value_reduced = Value {
+                amount: Amount::from(amount - setoff_amount),
+                asset_id: asset::Id(Fq::from(asset_id64)),
+            };
+            let output_note_1 = Note::from_parts(
+                dest_debtor.clone(),
+                dest_creditor.clone(),
+                value_reduced,
+                Rseed(rseed_randomness),
+            ).expect("should be able to create note");
+            let output_note_commitment_1 = output_note_1.commit();
+            let output_note_2 = Note::from_parts(
+                dest_creditor,
+                dest_debtor,
+                value_reduced,
+                Rseed(rseed_randomness),
+            ).expect("should be able to create note");
+            let incorrect_output_note_commitment_2 = commitment(
                 incorrect_note_blinding,
                 value_to_send,
-                note.diversified_generator(),
-                note.transmission_key_s(),
-                note.clue_key(),
-                note.creditor().transmission_key_s().clone()
+                output_note_2.diversified_generator(),
+                output_note_2.transmission_key_s(),
+                output_note_2.clue_key(),
+                output_note_2.creditor().transmission_key_s().clone()
             );
 
             let constants = SettlementProofConst::default();
-            let leaves: Vec<[Fq; 1]> = vec![[note.commit().0]];
+            let leaves: Vec<[Fq; 1]> = vec![[input_note_1.commit().0], [input_note_2.commit().0]];
 
             // Build tree with our one dummy note in order to get the merkle root value
             let tree = Poseidon377MerkleTree::new(
@@ -694,10 +720,20 @@ mod tests {
             .unwrap();
 
             // Get auth path from 0th leaf to root (input note)
-            let input_auth_path = tree.generate_proof(0).unwrap();
+            let input_auth_path_1 = tree.generate_proof(0).unwrap();
+            let input_auth_path_2 = tree.generate_proof(1).unwrap();
 
-            let bad_public = SettlementProofPublic { output_notes_commitments: vec![incorrect_note_commitment], nullifiers: vec![nullifier], root: tree.root()};
-            let private = SettlementProofPrivate { output_notes: vec![note], input_notes: vec![], setoff_amount: Amount::zero(), input_notes_proofs: vec![input_auth_path]};
+            let bad_public = SettlementProofPublic {
+                output_notes_commitments: vec![output_note_commitment_1, incorrect_output_note_commitment_2],
+                nullifiers: vec![input_note_nullifier_1, input_note_nullifier_2],
+                root: tree.root()
+            };
+            let private = SettlementProofPrivate {
+                output_notes: vec![output_note_1, output_note_2],
+                input_notes: vec![input_note_1, input_note_2],
+                setoff_amount: Amount::from(setoff_amount),
+                input_notes_proofs: vec![input_auth_path_1, input_auth_path_2]
+            };
 
             (bad_public, private)
         }
