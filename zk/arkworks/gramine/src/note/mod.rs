@@ -48,6 +48,10 @@ impl Note {
         value: Value,
         rseed: Rseed,
     ) -> Result<Self, Error> {
+        if debtor == creditor {
+            return Err(Error::NoteTypeUnsupported);
+        }
+
         Ok(Self {
             value,
             rseed,

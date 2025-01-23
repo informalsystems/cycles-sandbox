@@ -68,6 +68,16 @@ impl AllocVar<Note, Fq> for NoteVar {
         let debtor = AddressVar::new_variable(cs.clone(), || Ok(note.debtor()), mode)?;
         let creditor = AddressVar::new_variable(cs, || Ok(note.creditor()), mode)?;
 
+        let debtor_creditor_eq = {
+            let is_eq_d = debtor
+                .diversified_generator
+                .is_eq(&creditor.diversified_generator)?;
+            let is_eq_t = debtor.transmission_key.is_eq(&creditor.transmission_key)?;
+            let is_eq_c = debtor.clue_key.is_eq(&creditor.clue_key)?;
+            is_eq_d.and(&is_eq_t.and(&is_eq_c)?)?
+        };
+        debtor_creditor_eq.not().enforce_equal(&Boolean::TRUE)?;
+
         Ok(Self {
             note_blinding,
             value,
