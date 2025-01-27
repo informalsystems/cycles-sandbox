@@ -20,7 +20,6 @@ use penumbra_keys::keys::{
     AuthorizationKeyVar, Bip44Path, IncomingViewingKeyVar, NullifierKey, NullifierKeyVar,
     RandomizedVerificationKey, SeedPhrase, SpendAuthRandomizerVar, SpendKey,
 };
-use penumbra_keys::FullViewingKey;
 use penumbra_proof_params::{DummyWitness, VerifyingKeyExt, GROTH16_PROOF_LENGTH_BYTES};
 use penumbra_shielded_pool::{note::StateCommitment, Rseed};
 
@@ -51,6 +50,8 @@ pub struct OutputProofPrivate {
 
 #[cfg(test)]
 fn check_satisfaction(public: &OutputProofPublic, private: &OutputProofPrivate) -> Result<()> {
+    use penumbra_keys::FullViewingKey;
+
     if private.note.diversified_generator() == decaf377::Element::default() {
         anyhow::bail!("diversified generator is identity");
     }
