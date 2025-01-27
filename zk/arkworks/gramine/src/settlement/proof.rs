@@ -19,8 +19,8 @@ use base64::prelude::*;
 use decaf377::{Bls12_377, Fq};
 use decaf377_fmd as fmd;
 use decaf377_ka as ka;
-use penumbra_asset::{Value, ValueVar};
-use penumbra_keys::{keys::Diversifier, Address, AddressVar};
+use penumbra_asset::Value;
+use penumbra_keys::{keys::Diversifier, Address};
 use penumbra_num::{Amount, AmountVar};
 use penumbra_proof_params::{DummyWitness, VerifyingKeyExt, GROTH16_PROOF_LENGTH_BYTES};
 use penumbra_proto::{penumbra::core::component::shielded_pool::v1 as pb, DomainType};
@@ -29,6 +29,7 @@ use penumbra_tct::r1cs::StateCommitmentVar;
 use poseidon377::{RATE_1_PARAMS, RATE_2_PARAMS};
 use poseidon_parameters::v1::Matrix;
 
+use crate::note::r1cs::enforce_equal_addresses;
 use crate::note::{r1cs::NoteVar, Note};
 use crate::nullifier::{Nullifier, NullifierVar};
 
@@ -237,133 +238,32 @@ impl SettlementCircuit {
 
 impl ConstraintSynthesizer<Fq> for SettlementCircuit {
     fn generate_constraints(self, cs: ConstraintSystemRef<Fq>) -> ark_relations::r1cs::Result<()> {
-        // TODO: impl note well-formedness checks
-
-        for (note_commitment, note) in self
-            .public
-            .output_notes_commitments
+        // Witnesses
+        let output_note_vars = self
+            .private
+            .output_notes
             .iter()
-            .zip(self.private.output_notes.iter())
-        {
-            // Witnesses
-            // Note: In the allocation of the address on `NoteVar`, we check the diversified base is not identity.
-            let note_var = NoteVar::new_witness(cs.clone(), || Ok(note.clone()))?;
-
-            // Public inputs
-            let claimed_note_commitment =
-                StateCommitmentVar::new_input(cs.clone(), || Ok(note_commitment))?;
-
-            // Note commitment integrity
-            let note_commitment = note_var.commit()?;
-            note_commitment.enforce_equal(&claimed_note_commitment)?;
-        }
-
-        for (nullifier, note) in self
-            .public
-            .nullifiers
-            .iter()
-            .zip(self.private.input_notes.iter())
-        {
-            // Witnesses
-            // Note: In the allocation of the address on `NoteVar`, we check the diversified base is not identity.
-            let note_var = NoteVar::new_witness(cs.clone(), || Ok(note.clone()))?;
-
-            // Public inputs
-            let claimed_nullifier_var = NullifierVar::new_input(cs.clone(), || Ok(nullifier))?;
-
-            let nullifier_var = NullifierVar::derive(&note_var)?;
-            nullifier_var.enforce_equal(&claimed_nullifier_var)?;
-        }
-
-        let constants = SettlementProofConst::default();
-
-        for (note, auth_path) in self
+            .map(|note| NoteVar::new_witness(cs.clone(), || Ok(note.clone())))
+            .collect::<Result<Vec<_>, _>>()?;
+        let input_note_vars = self
             .private
             .input_notes
             .iter()
-            .zip(self.private.input_notes_proofs.iter())
-        {
-            let path_var =
+            .map(|note| NoteVar::new_witness(cs.clone(), || Ok(note.clone())))
+            .collect::<Result<Vec<_>, _>>()?;
+        let input_note_proof_vars = self
+            .private
+            .input_notes_proofs
+            .iter()
+            .map(|auth_path| {
                 Poseidon377MerklePathVar::new_witness(ark_relations::ns!(cs, "path_var"), || {
                     Ok(auth_path)
-                })?;
-
-            let note_var = NoteVar::new_witness(cs.clone(), || Ok(note.clone()))?;
-            let root_var = RootVar::new_input(cs.clone(), || Ok(self.public.root.clone()))?;
-
-            // Then, we allocate the public parameters as constants:
-            let leaf_crh_params_var =
-                CRHParametersVar::new_constant(cs.clone(), &constants.leaf_crh_params)?;
-            let two_to_one_crh_params_var =
-                CRHParametersVar::new_constant(cs.clone(), &constants.two_to_one_crh_params)?;
-
-            let is_member = path_var.verify_membership(
-                &leaf_crh_params_var,
-                &two_to_one_crh_params_var,
-                &root_var,
-                &[note_var.commit()?.inner],
-            )?;
-            is_member.enforce_equal(&Boolean::TRUE)?;
-        }
-
-        fn enforce_equal_addresses(
-            addr1: AddressVar,
-            addr2: AddressVar,
-        ) -> Result<(), SynthesisError> {
-            let AddressVar {
-                diversified_generator,
-                transmission_key,
-                clue_key,
-            } = addr1;
-            addr2
-                .diversified_generator
-                .enforce_equal(&diversified_generator)?;
-            addr2.transmission_key.enforce_equal(&transmission_key)?;
-            addr2.clue_key.enforce_equal(&clue_key)?;
-            Ok(())
-        }
-
-        let debtor_var = |n: &Note| AddressVar::new_witness(cs.clone(), || Ok(n.debtor()));
-        let creditor_var = |n: &Note| AddressVar::new_witness(cs.clone(), || Ok(n.creditor()));
-        for notes in self.private.input_notes.windows(2) {
-            let curr_creditor = creditor_var(&notes[0])?;
-            let next_debtor = debtor_var(&notes[1])?;
-            enforce_equal_addresses(curr_creditor, next_debtor)?;
-        }
-        let first_debtor = self
-            .private
-            .input_notes
-            .first()
-            .map(debtor_var)
-            .ok_or_else(|| SynthesisError::Unsatisfiable)??;
-        let last_creditor = self
-            .private
-            .input_notes
-            .last()
-            .map(creditor_var)
-            .ok_or_else(|| SynthesisError::Unsatisfiable)??;
-        enforce_equal_addresses(first_debtor, last_creditor)?;
-
-        // fixme: Do we need to check there are >1 input notes?
-
-        // setoff_amount > 0
-        let value_var = |n: &Note| ValueVar::new_witness(cs.clone(), || Ok(n.value()));
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
         let setoff_var = AmountVar::new_witness(cs.clone(), || Ok(self.private.setoff_amount))?;
-        let zero_var = AmountVar::new_witness(cs.clone(), || Ok(Amount::zero()))?;
-        setoff_var
-            .amount
-            .enforce_cmp(&zero_var.amount, Ordering::Greater, false)?;
 
-        // min_amount >= setoff_amount
-        for note in &self.private.input_notes {
-            let value_var = value_var(note)?;
-            value_var
-                .amount
-                .amount
-                .enforce_cmp(&setoff_var.amount, Ordering::Greater, true)?
-        }
-
-        let mut expected_output_notes = vec![];
+        let mut expected_output_note_commitment_vars = vec![];
         for note in self.private.input_notes {
             let note_var = {
                 let remainder = note.amount() - self.private.setoff_amount;
@@ -376,14 +276,98 @@ impl ConstraintSynthesizer<Fq> for SettlementCircuit {
                         .map_err(|_| SynthesisError::Unsatisfiable)?;
                 NoteVar::new_witness(cs.clone(), || Ok(note.clone()))?
             };
-            expected_output_notes.push(note_var.commit()?);
+            expected_output_note_commitment_vars.push(note_var.commit()?);
         }
-        for (expected, claimed) in expected_output_notes
+
+        // Public inputs
+        let output_note_commitment_vars = self
+            .public
+            .output_notes_commitments
             .iter()
-            .zip(self.public.output_notes_commitments.iter())
+            .map(|commitment| StateCommitmentVar::new_input(cs.clone(), || Ok(*commitment)))
+            .collect::<Result<Vec<_>, _>>()?;
+        let nullifier_vars = self
+            .public
+            .nullifiers
+            .iter()
+            .map(|nullifier| NullifierVar::new_input(cs.clone(), || Ok(*nullifier)))
+            .collect::<Result<Vec<_>, _>>()?;
+        let root_var = RootVar::new_input(cs.clone(), || Ok(self.public.root))?;
+
+        // Constants
+        let constants = SettlementProofConst::default();
+        let leaf_crh_params_var =
+            CRHParametersVar::new_constant(cs.clone(), &constants.leaf_crh_params)?;
+        let two_to_one_crh_params_var =
+            CRHParametersVar::new_constant(cs.clone(), &constants.two_to_one_crh_params)?;
+        let zero_var = AmountVar::new_constant(cs.clone(), Amount::zero())?;
+
+        // TODO: impl note well-formedness checks
+
+        // Note commitment integrity check
+        for (output_note_commitment_var, output_note_var) in output_note_commitment_vars
+            .iter()
+            .zip(output_note_vars.iter())
         {
-            let claimed = StateCommitmentVar::new_input(cs.clone(), || Ok(claimed))?;
-            expected.enforce_equal(&claimed)?;
+            let note_commitment = output_note_var.commit()?;
+            note_commitment.enforce_equal(output_note_commitment_var)?;
+        }
+
+        // Nullifier integrity check
+        for (claimed_nullifier_var, note_var) in nullifier_vars.iter().zip(input_note_vars.iter()) {
+            let nullifier_var = NullifierVar::derive(note_var)?;
+            nullifier_var.enforce_equal(claimed_nullifier_var)?;
+        }
+
+        for (input_note_var, input_note_proof_var) in
+            input_note_vars.iter().zip(input_note_proof_vars.iter())
+        {
+            let is_member = input_note_proof_var.verify_membership(
+                &leaf_crh_params_var,
+                &two_to_one_crh_params_var,
+                &root_var,
+                &[input_note_var.commit()?.inner],
+            )?;
+            is_member.enforce_equal(&Boolean::TRUE)?;
+        }
+
+        for input_note_var in input_note_vars.windows(2) {
+            let curr_creditor = &input_note_var[0].creditor;
+            let next_debtor = &input_note_var[1].debtor;
+            enforce_equal_addresses(curr_creditor, next_debtor)?;
+        }
+        let first_debtor = input_note_vars
+            .first()
+            .map(|n| &n.debtor)
+            .ok_or(SynthesisError::Unsatisfiable)?;
+        let last_creditor = input_note_vars
+            .last()
+            .map(|n| &n.creditor)
+            .ok_or(SynthesisError::Unsatisfiable)?;
+        enforce_equal_addresses(first_debtor, last_creditor)?;
+
+        // fixme: Do we need to check there are >1 input notes?
+
+        // setoff_amount > 0
+        setoff_var
+            .amount
+            .enforce_cmp(&zero_var.amount, Ordering::Greater, false)?;
+
+        // min_amount >= setoff_amount
+        for input_note_var in &input_note_vars {
+            input_note_var.value.amount.amount.enforce_cmp(
+                &setoff_var.amount,
+                Ordering::Greater,
+                true,
+            )?
+        }
+
+        // check output notes correspond to reduced input notes
+        for (expected, claimed) in expected_output_note_commitment_vars
+            .iter()
+            .zip(output_note_commitment_vars.iter())
+        {
+            expected.enforce_equal(claimed)?;
         }
 
         Ok(())
@@ -681,25 +665,51 @@ mod tests {
                 amount: Amount::from(amount),
                 asset_id: asset::Id(Fq::from(asset_id64)),
             };
-            let note = Note::from_parts(
-                dest_debtor,
-                dest_creditor,
+            let input_note_1 = Note::from_parts(
+                dest_debtor.clone(),
+                dest_creditor.clone(),
                 value_to_send,
                 Rseed(rseed_randomness),
             ).expect("should be able to create note");
-            let nullifier = Nullifier::derive(&note);
+            let input_note_nullifier_1 = Nullifier::derive(&input_note_1);
 
-            let incorrect_note_commitment = commitment(
+            let input_note_2 = Note::from_parts(
+                dest_creditor.clone(),
+                dest_debtor.clone(),
+                value_to_send,
+                Rseed(rseed_randomness),
+            ).expect("should be able to create note");
+            let input_note_nullifier_2 = Nullifier::derive(&input_note_2);
+
+            let setoff_amount = amount;
+            let value_reduced = Value {
+                amount: Amount::from(amount - setoff_amount),
+                asset_id: asset::Id(Fq::from(asset_id64)),
+            };
+            let output_note_1 = Note::from_parts(
+                dest_debtor.clone(),
+                dest_creditor.clone(),
+                value_reduced,
+                Rseed(rseed_randomness),
+            ).expect("should be able to create note");
+            let output_note_commitment_1 = output_note_1.commit();
+            let output_note_2 = Note::from_parts(
+                dest_creditor,
+                dest_debtor,
+                value_reduced,
+                Rseed(rseed_randomness),
+            ).expect("should be able to create note");
+            let incorrect_output_note_commitment_2 = commitment(
                 incorrect_note_blinding,
                 value_to_send,
-                note.diversified_generator(),
-                note.transmission_key_s(),
-                note.clue_key(),
-                note.creditor().transmission_key_s().clone()
+                output_note_2.diversified_generator(),
+                output_note_2.transmission_key_s(),
+                output_note_2.clue_key(),
+                output_note_2.creditor().transmission_key_s().clone()
             );
 
             let constants = SettlementProofConst::default();
-            let leaves: Vec<[Fq; 1]> = vec![[note.commit().0]];
+            let leaves: Vec<[Fq; 1]> = vec![[input_note_1.commit().0], [input_note_2.commit().0]];
 
             // Build tree with our one dummy note in order to get the merkle root value
             let tree = Poseidon377MerkleTree::new(
@@ -710,10 +720,20 @@ mod tests {
             .unwrap();
 
             // Get auth path from 0th leaf to root (input note)
-            let input_auth_path = tree.generate_proof(0).unwrap();
+            let input_auth_path_1 = tree.generate_proof(0).unwrap();
+            let input_auth_path_2 = tree.generate_proof(1).unwrap();
 
-            let bad_public = SettlementProofPublic { output_notes_commitments: vec![incorrect_note_commitment], nullifiers: vec![nullifier], root: tree.root()};
-            let private = SettlementProofPrivate { output_notes: vec![note], input_notes: vec![], setoff_amount: Amount::zero(), input_notes_proofs: vec![input_auth_path]};
+            let bad_public = SettlementProofPublic {
+                output_notes_commitments: vec![output_note_commitment_1, incorrect_output_note_commitment_2],
+                nullifiers: vec![input_note_nullifier_1, input_note_nullifier_2],
+                root: tree.root()
+            };
+            let private = SettlementProofPrivate {
+                output_notes: vec![output_note_1, output_note_2],
+                input_notes: vec![input_note_1, input_note_2],
+                setoff_amount: Amount::from(setoff_amount),
+                input_notes_proofs: vec![input_auth_path_1, input_auth_path_2]
+            };
 
             (bad_public, private)
         }

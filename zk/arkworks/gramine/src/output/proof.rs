@@ -12,7 +12,6 @@ use ark_groth16::{Groth16, PreparedVerifyingKey, Proof, ProvingKey};
 use ark_r1cs_std::prelude::*;
 use ark_relations::r1cs::{ConstraintSynthesizer, ConstraintSystemRef};
 use ark_snark::SNARK;
-use penumbra_keys::{Address, FullViewingKey};
 use penumbra_proto::{penumbra::core::component::shielded_pool::v1 as pb, DomainType};
 use penumbra_tct::r1cs::StateCommitmentVar;
 
@@ -51,6 +50,8 @@ pub struct OutputProofPrivate {
 
 #[cfg(test)]
 fn check_satisfaction(public: &OutputProofPublic, private: &OutputProofPrivate) -> Result<()> {
+    use penumbra_keys::FullViewingKey;
+
     if private.note.diversified_generator() == decaf377::Element::default() {
         anyhow::bail!("diversified generator is identity");
     }
@@ -288,6 +289,7 @@ mod tests {
     use decaf377::Fq;
     use penumbra_asset::{asset, Value};
     use penumbra_keys::keys::{Bip44Path, SeedPhrase, SpendKey};
+    use penumbra_keys::Address;
     use penumbra_num::Amount;
     use proptest::prelude::*;
 

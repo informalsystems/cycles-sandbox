@@ -1,3 +1,5 @@
+use std::fmt;
+
 use decaf377::Fq;
 use decaf377_fmd as fmd;
 use decaf377_ka as ka;
@@ -8,6 +10,9 @@ use penumbra_num::Amount;
 use penumbra_shielded_pool::note::Error;
 use penumbra_shielded_pool::Rseed;
 use penumbra_tct::StateCommitment;
+use serde::de::{MapAccess, Visitor};
+use serde::ser::SerializeStruct;
+use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
 
 pub mod r1cs;
 
@@ -48,6 +53,10 @@ impl Note {
         value: Value,
         rseed: Rseed,
     ) -> Result<Self, Error> {
+        if debtor == creditor {
+            return Err(Error::NoteTypeUnsupported);
+        }
+
         Ok(Self {
             value,
             rseed,
@@ -145,4 +154,125 @@ pub fn commitment(
     );
 
     StateCommitment(commit)
+}
+
+// Implement Serialize for Note
+impl Serialize for Note {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        // Use a map to serialize fields
+        let mut state = serializer.serialize_struct("Note", 4)?;
+        state.serialize_field("value", &self.value)?;
+        state.serialize_field("rseed", &self.rseed.to_bytes())?;
+        state.serialize_field("debtor", &self.debtor)?;
+        state.serialize_field("creditor", &self.creditor)?;
+        state.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for Note {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(field_identifier, rename_all = "lowercase")]
+        enum Field {
+            Value,
+            Rseed,
+            Debtor,
+            Creditor,
+        }
+
+        struct NoteVisitor;
+
+        impl<'de> Visitor<'de> for NoteVisitor {
+            type Value = Note;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("struct Note")
+            }
+
+            fn visit_map<V>(self, mut map: V) -> Result<Self::Value, V::Error>
+            where
+                V: MapAccess<'de>,
+            {
+                let mut value = None;
+                let mut rseed = None;
+                let mut debtor = None;
+                let mut creditor = None;
+
+                while let Some(key) = map.next_key()? {
+                    match key {
+                        Field::Value => {
+                            if value.is_some() {
+                                return Err(de::Error::duplicate_field("value"));
+                            }
+                            value = Some(map.next_value()?);
+                        }
+                        Field::Rseed => {
+                            if rseed.is_some() {
+                                return Err(de::Error::duplicate_field("rseed"));
+                            }
+                            rseed = Some(Rseed(map.next_value::<[u8; 32]>()?));
+                        }
+                        Field::Debtor => {
+                            if debtor.is_some() {
+                                return Err(de::Error::duplicate_field("debtor"));
+                            }
+                            debtor = Some(map.next_value()?);
+                        }
+                        Field::Creditor => {
+                            if creditor.is_some() {
+                                return Err(de::Error::duplicate_field("creditor"));
+                            }
+                            creditor = Some(map.next_value()?);
+                        }
+                    }
+                }
+
+                let value = value.ok_or_else(|| de::Error::missing_field("value"))?;
+                let rseed = rseed.ok_or_else(|| de::Error::missing_field("rseed"))?;
+                let debtor = debtor.ok_or_else(|| de::Error::missing_field("debtor"))?;
+                let creditor = creditor.ok_or_else(|| de::Error::missing_field("creditor"))?;
+
+                Note::from_parts(debtor, creditor, value, rseed).map_err(de::Error::custom)
+            }
+        }
+
+        const FIELDS: &[&str] = &["value", "rseed", "debtor", "creditor"];
+        deserializer.deserialize_struct("Note", FIELDS, NoteVisitor)
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use crate::note::Note;
+    use decaf377::Fq;
+    use penumbra_asset::asset::Id;
+    use penumbra_asset::Value;
+    use penumbra_keys::Address;
+    use penumbra_shielded_pool::Rseed;
+    use rand::thread_rng;
+
+    #[test]
+    fn test_serde_rountrip() {
+        let mut rng = thread_rng();
+        let note = Note::from_parts(
+            Address::dummy(&mut rng),
+            Address::dummy(&mut rng),
+            Value {
+                amount: 10u64.into(),
+                asset_id: Id(Fq::from(1u64)),
+            },
+            Rseed::generate(&mut rng),
+        )
+        .expect("hardcoded note");
+
+        let note_serialized = serde_json::to_vec(&note).unwrap();
+        let note_deserialized = serde_json::from_slice(&note_serialized).unwrap();
+        assert_eq!(note, note_deserialized);
+    }
 }

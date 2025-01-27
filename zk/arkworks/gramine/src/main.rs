@@ -1,6 +1,12 @@
+use std::fs;
+use std::io::BufWriter;
+use std::path::{Path, PathBuf};
+
 use anyhow::Error;
 use ark_groth16::{ProvingKey, VerifyingKey};
 use ark_serialize::CanonicalSerialize;
+use arkworks_gramine::output::OutputCircuit;
+use arkworks_gramine::settlement::SettlementCircuit;
 use decaf377::Bls12_377;
 use penumbra_proof_params::{
     generate_constraint_matrices, DummyWitness, ProvingKeyExt, VerifyingKeyExt,
@@ -10,12 +16,6 @@ use penumbra_proof_setup::single::{
     Phase2Contribution,
 };
 use rand_core::OsRng;
-use std::fs;
-use std::io::BufWriter;
-use std::path::PathBuf;
-
-use crate::output::OutputCircuit;
-use crate::settlement::SettlementCircuit;
 
 pub mod note;
 pub mod nullifier;
@@ -75,7 +75,7 @@ fn main() {
 }
 
 fn write_params(
-    target_dir: &PathBuf,
+    target_dir: &Path,
     name: &str,
     pk: &ProvingKey<Bls12_377>,
     vk: &VerifyingKey<Bls12_377>,
