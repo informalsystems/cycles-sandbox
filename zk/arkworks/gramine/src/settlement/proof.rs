@@ -398,7 +398,7 @@ impl DummyWitness for SettlementCircuit {
         let constants = SettlementProofConst::default();
 
         // Enter duplicate commit to satisfy the need for >1 leaves in the `MerkleTree::new` function
-        let leaves: Vec<[Fq; 1]> = vec![[note.commit().0]];
+        let leaves: Vec<[Fq; 1]> = vec![[note.commit().0], [note.commit().0]];
 
         // Build tree with our one dummy note in order to get the merkle root value
         let tree = Poseidon377MerkleTree::new(
