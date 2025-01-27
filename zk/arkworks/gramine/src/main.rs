@@ -15,6 +15,7 @@ use std::io::BufWriter;
 use std::path::PathBuf;
 
 use crate::output::OutputCircuit;
+use crate::settlement::SettlementCircuit;
 
 pub mod note;
 pub mod nullifier;
@@ -68,6 +69,9 @@ fn main() {
 
     let (output_pk, output_vk) = generate_parameters::<OutputCircuit>();
     write_params(&target_dir, "output", &output_pk, &output_vk).expect("write failure");
+
+    let (settlement_pk, settlement_vk) = generate_parameters::<SettlementCircuit>();
+    write_params(&target_dir, "settlement", &settlement_pk, &settlement_vk).expect("write failure");
 }
 
 fn write_params(
