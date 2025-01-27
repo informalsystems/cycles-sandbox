@@ -238,7 +238,7 @@ impl<'de> Deserialize<'de> for Note {
                 let debtor = debtor.ok_or_else(|| de::Error::missing_field("debtor"))?;
                 let creditor = creditor.ok_or_else(|| de::Error::missing_field("creditor"))?;
 
-                Note::from_parts(debtor, creditor, value, rseed).map_err(|e| de::Error::custom(e))
+                Note::from_parts(debtor, creditor, value, rseed).map_err(de::Error::custom)
             }
         }
 
