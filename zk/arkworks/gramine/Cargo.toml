@@ -41,6 +41,8 @@ tracing                          = { version = "0.1.41", default-features = fals
 
 [dev-dependencies]
 proptest                         = { version = "1" }
+rand                             = { version = "0.8.5" }
+serde_json                       = { version = "1.0.135" }
 
 [patch.crates-io]
 decaf377                         = { git = "https://github.com/hu55a1n1/decaf377.git" }
