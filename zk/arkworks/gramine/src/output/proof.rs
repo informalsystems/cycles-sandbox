@@ -251,6 +251,14 @@ impl OutputProof {
                 .to_field_elements()
                 .ok_or_else(|| anyhow::anyhow!("note commitment is not a valid field element"))?,
         );
+        let element_rk = decaf377::Encoding(public.rk.to_bytes())
+            .vartime_decompress()
+            .map_err(|_| anyhow::anyhow!("could not decompress element points"))?;
+        public_inputs.extend(
+            element_rk
+                .to_field_elements()
+                .ok_or_else(|| anyhow::anyhow!("rk is not a valid field element"))?,
+        );
 
         tracing::trace!(?public_inputs);
         let start = std::time::Instant::now();
