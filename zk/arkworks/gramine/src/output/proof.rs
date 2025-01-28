@@ -287,6 +287,12 @@ impl TryFrom<pb::ZkOutputProof> for OutputProof {
     }
 }
 
+impl From<OutputProof> for [u8; GROTH16_PROOF_LENGTH_BYTES] {
+    fn from(value: OutputProof) -> Self {
+        value.0
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
