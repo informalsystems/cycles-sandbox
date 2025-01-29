@@ -5,8 +5,6 @@ use std::path::{Path, PathBuf};
 use anyhow::Error;
 use ark_groth16::{ProvingKey, VerifyingKey};
 use ark_serialize::CanonicalSerialize;
-use arkworks_gramine::output::OutputCircuit;
-use arkworks_gramine::settlement::SettlementCircuit;
 use decaf377::Bls12_377;
 use penumbra_proof_params::{
     generate_constraint_matrices, DummyWitness, ProvingKeyExt, VerifyingKeyExt,
@@ -17,11 +15,9 @@ use penumbra_proof_setup::single::{
 };
 use rand_core::OsRng;
 
-pub mod note;
-pub mod nullifier;
-pub mod output;
-pub mod proof_bundle;
-pub mod settlement;
+use arkworks_gramine::{
+    output::OutputCircuit, settlement::SettlementCircuit
+};
 
 fn generate_parameters<D: DummyWitness>() -> (ProvingKey<Bls12_377>, VerifyingKey<Bls12_377>) {
     let matrices = generate_constraint_matrices::<D>();
