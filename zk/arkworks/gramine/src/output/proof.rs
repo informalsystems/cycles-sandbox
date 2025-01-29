@@ -163,21 +163,28 @@ impl ConstraintSynthesizer<Fq> for OutputCircuit {
 
 impl DummyWitness for OutputCircuit {
     fn with_dummy_witness() -> Self {
-        let seed_phrase = SeedPhrase::from_randomness(&[b'f'; 32]);
-        let sk_sender = SpendKey::from_seed_phrase_bip44(seed_phrase, &Bip44Path::new(0));
-        let fvk_sender = sk_sender.full_viewing_key();
-        let ivk_sender = fvk_sender.incoming();
-        let (address, _dtk_d) = ivk_sender.payment_address(0u32.into());
+        let seed_phrase_debtor = SeedPhrase::from_randomness(&[b'f'; 32]);
+        let sk_debtor = SpendKey::from_seed_phrase_bip44(seed_phrase_debtor, &Bip44Path::new(0));
+        let fvk_debtor = sk_debtor.full_viewing_key();
+        let ivk_debtor = fvk_debtor.incoming();
+        let (address_debtor, _dtk_d) = ivk_debtor.payment_address(0u32.into());
 
         let spend_auth_randomizer = Fr::from(1u64);
-        let rsk = sk_sender.spend_auth_key().randomize(&spend_auth_randomizer);
-        let rk: VerificationKey<SpendAuth> = rsk.into();
-        let nk = *sk_sender.nullifier_key();
-        let ak = sk_sender.spend_auth_key().into();
+        let rsk_debtor = sk_debtor.spend_auth_key().randomize(&spend_auth_randomizer);
+        let rk_debtor: VerificationKey<SpendAuth> = rsk_debtor.into();
+        let nk_debtor = *sk_debtor.nullifier_key();
+        let ak_debtor = sk_debtor.spend_auth_key().into();
+
+        let seed_phrase_creditor = SeedPhrase::from_randomness(&[b'e'; 32]);
+        let sk_creditor =
+            SpendKey::from_seed_phrase_bip44(seed_phrase_creditor, &Bip44Path::new(0));
+        let fvk_creditor = sk_creditor.full_viewing_key();
+        let ivk_creditor = fvk_creditor.incoming();
+        let (address_creditor, _dtk_d) = ivk_creditor.payment_address(0u32.into());
 
         let note = Note::from_parts(
-            address.clone(),
-            address, // fixme: this should be a different address
+            address_debtor,
+            address_creditor,
             Value::from_str("1upenumbra").expect("valid value"),
             Rseed([1u8; 32]),
         )
@@ -185,13 +192,13 @@ impl DummyWitness for OutputCircuit {
 
         let public = OutputProofPublic {
             note_commitment: note.commit(),
-            rk,
+            rk: rk_debtor,
         };
         let private = OutputProofPrivate {
             note,
             spend_auth_randomizer,
-            ak,
-            nk,
+            ak: ak_debtor,
+            nk: nk_debtor,
         };
         OutputCircuit { public, private }
     }
@@ -244,6 +251,14 @@ impl OutputProof {
                 .to_field_elements()
                 .ok_or_else(|| anyhow::anyhow!("note commitment is not a valid field element"))?,
         );
+        let element_rk = decaf377::Encoding(public.rk.to_bytes())
+            .vartime_decompress()
+            .map_err(|_| anyhow::anyhow!("could not decompress element points"))?;
+        public_inputs.extend(
+            element_rk
+                .to_field_elements()
+                .ok_or_else(|| anyhow::anyhow!("rk is not a valid field element"))?,
+        );
 
         tracing::trace!(?public_inputs);
         let start = std::time::Instant::now();
@@ -277,6 +292,12 @@ impl TryFrom<pb::ZkOutputProof> for OutputProof {
 
     fn try_from(proto: pb::ZkOutputProof) -> Result<Self, Self::Error> {
         Ok(OutputProof(proto.inner[..].try_into()?))
+    }
+}
+
+impl From<OutputProof> for [u8; GROTH16_PROOF_LENGTH_BYTES] {
+    fn from(value: OutputProof) -> Self {
+        value.0
     }
 }
 
