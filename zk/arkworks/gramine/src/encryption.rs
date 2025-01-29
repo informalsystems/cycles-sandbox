@@ -1,6 +1,6 @@
 use ark_crypto_primitives::encryption::AsymmetricEncryptionScheme;
 use ark_crypto_primitives::Error as ArkworksError;
-use decaf377::{Encoding, Fq};
+use decaf377::{Element, Encoding, Fq};
 use decaf377_ka::{Error, Public, Secret};
 use once_cell::sync::Lazy;
 use poseidon377::hash_2;
@@ -10,10 +10,19 @@ use rand_core::OsRng;
 pub(crate) static ENC_DOMAIN_SEP: Lazy<Fq> =
     Lazy::new(|| Fq::from_le_bytes_mod_order(b"CyclesEncryption"));
 
+pub type PublicKey = Public;
+pub type SecretKey = Secret;
+pub type Randomness = Secret;
+pub type Plaintext = Vec<Fq>;
+pub type Ciphertext = (Public, Vec<Fq>);
+pub struct Parameters {
+    generator: Element,
+}
+
 pub struct Ecies;
 
 impl AsymmetricEncryptionScheme for Ecies {
-    type Parameters = ();
+    type Parameters = Parameters;
     type PublicKey = Public;
     type SecretKey = Secret;
     type Randomness = Secret;
@@ -21,7 +30,9 @@ impl AsymmetricEncryptionScheme for Ecies {
     type Ciphertext = (Public, Vec<Fq>);
 
     fn setup<R: Rng>(_rng: &mut R) -> Result<Self::Parameters, ArkworksError> {
-        Ok(())
+        Ok(Parameters {
+            generator: Element::GENERATOR,
+        })
     }
 
     fn keygen<R: Rng>(
@@ -59,6 +70,7 @@ pub fn ecies_encrypt(pk: Public, r: &Secret, msg: Vec<Fq>) -> Result<(Public, Ve
     // compute c1 = r * generator
     let c1 = r.public();
 
+    // compute c2 = m + s
     let mut c2 = vec![];
     for (i, fq) in msg.into_iter().enumerate() {
         let h = hash_2(
@@ -66,7 +78,6 @@ pub fn ecies_encrypt(pk: Public, r: &Secret, msg: Vec<Fq>) -> Result<(Public, Ve
             (s.vartime_compress_to_field(), Fq::from(i as u128)),
         );
 
-        // compute c2 = m + s
         c2.push(fq + h);
     }
 
@@ -113,5 +124,3 @@ mod tests {
         assert_eq!(msg, msg_dec);
     }
 }
-
-pub mod r1cs {}
