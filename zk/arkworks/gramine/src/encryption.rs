@@ -1,10 +1,54 @@
+use ark_crypto_primitives::encryption::AsymmetricEncryptionScheme;
+use ark_crypto_primitives::Error as ArkworksError;
 use decaf377::{Encoding, Fq};
 use decaf377_ka::{Error, Public, Secret};
 use once_cell::sync::Lazy;
 use poseidon377::hash_2;
+use rand::Rng;
+use rand_core::OsRng;
 
 pub(crate) static ENC_DOMAIN_SEP: Lazy<Fq> =
     Lazy::new(|| Fq::from_le_bytes_mod_order(b"CyclesEncryption"));
+
+pub struct Ecies;
+
+impl AsymmetricEncryptionScheme for Ecies {
+    type Parameters = ();
+    type PublicKey = Public;
+    type SecretKey = Secret;
+    type Randomness = Secret;
+    type Plaintext = Vec<Fq>;
+    type Ciphertext = (Public, Vec<Fq>);
+
+    fn setup<R: Rng>(_rng: &mut R) -> Result<Self::Parameters, ArkworksError> {
+        Ok(())
+    }
+
+    fn keygen<R: Rng>(
+        _pp: &Self::Parameters,
+        _rng: &mut R,
+    ) -> Result<(Self::PublicKey, Self::SecretKey), ArkworksError> {
+        let sk = Secret::new(&mut OsRng);
+        Ok((sk.public(), sk))
+    }
+
+    fn encrypt(
+        _pp: &Self::Parameters,
+        pk: &Self::PublicKey,
+        message: &Self::Plaintext,
+        r: &Self::Randomness,
+    ) -> Result<Self::Ciphertext, ArkworksError> {
+        ecies_encrypt(pk.clone(), r, message.clone()).map_err(Into::into)
+    }
+
+    fn decrypt(
+        _pp: &Self::Parameters,
+        sk: &Self::SecretKey,
+        ciphertext: &Self::Ciphertext,
+    ) -> Result<Self::Plaintext, ArkworksError> {
+        ecies_decrypt(sk, ciphertext.clone()).map_err(Into::into)
+    }
+}
 
 pub fn ecies_encrypt(pk: Public, r: &Secret, msg: Vec<Fq>) -> Result<(Public, Vec<Fq>), Error> {
     // compute s = r * pk
