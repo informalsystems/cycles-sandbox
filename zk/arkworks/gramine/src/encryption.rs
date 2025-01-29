@@ -10,6 +10,8 @@ use rand_core::OsRng;
 pub(crate) static ENC_DOMAIN_SEP: Lazy<Fq> =
     Lazy::new(|| Fq::from_le_bytes_mod_order(b"CyclesEncryption"));
 
+pub mod r1cs;
+
 pub type PublicKey = Public;
 pub type SecretKey = Secret;
 pub type Randomness = Secret;
