@@ -19,6 +19,7 @@ use base64::prelude::*;
 use decaf377::{Bls12_377, Fq};
 use decaf377_fmd as fmd;
 use decaf377_ka as ka;
+use decaf377_ka::SharedSecret;
 use penumbra_asset::Value;
 use penumbra_keys::{keys::Diversifier, Address};
 use penumbra_num::{Amount, AmountVar};
@@ -29,6 +30,7 @@ use penumbra_tct::r1cs::StateCommitmentVar;
 use poseidon377::{RATE_1_PARAMS, RATE_2_PARAMS};
 use poseidon_parameters::v1::Matrix;
 
+use crate::encryption::Ciphertext;
 use crate::note::r1cs::enforce_equal_addresses;
 use crate::note::{r1cs::NoteVar, Note};
 use crate::nullifier::{Nullifier, NullifierVar};
@@ -40,8 +42,10 @@ pub struct SettlementProofPublic {
     pub output_notes_commitments: Vec<note::StateCommitment>,
     /// Nullifiers for input notes.
     pub nullifiers: Vec<Nullifier>,
-    // These are the public inputs to the circuit merkle tree verification circuit
+    /// These are the public inputs to the circuit merkle tree verification circuit
     pub root: Root,
+    /// Note ciphertexts encrypted using the note's shared secret.
+    pub note_ciphertexts: Vec<Ciphertext>,
 }
 
 /// The private input for an [`SettlementProof`].
@@ -55,6 +59,8 @@ pub struct SettlementProofPrivate {
     pub input_notes_proofs: Vec<Poseidon377MerklePath>,
     /// Setoff amount for this cycle.
     pub setoff_amount: Amount,
+    /// Shared secret used to encrypt the note.
+    pub shared_secrets: Vec<SharedSecret>,
 }
 
 /// The const input for an [`SettlementProof`].
@@ -415,12 +421,14 @@ impl DummyWitness for SettlementCircuit {
             output_notes_commitments: vec![note.commit()],
             nullifiers: vec![Nullifier::derive(&note)],
             root: tree.root(),
+            note_ciphertexts: vec![],
         };
         let private = SettlementProofPrivate {
             output_notes: vec![note.clone()],
             input_notes: vec![note],
             setoff_amount: Amount::zero(),
             input_notes_proofs: vec![auth_path],
+            shared_secrets: vec![SharedSecret([1; 32])],
         };
 
         SettlementCircuit { public, private }
@@ -525,15 +533,26 @@ impl TryFrom<pb::ZkOutputProof> for SettlementProof {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
-    use crate::note::{commitment, Note};
-
+    use ark_crypto_primitives::encryption::AsymmetricEncryptionScheme;
+    use ark_ff::ToConstraintField;
+    use arkworks_merkle_tree::poseidontree::Poseidon377MerkleTree;
     use decaf377::Fq;
+    use decaf377_ka::{Public, Secret, SharedSecret};
     use penumbra_asset::{asset, Value};
     use penumbra_keys::keys::{Bip44Path, SeedPhrase, SpendKey};
+    use penumbra_keys::Address;
     use penumbra_num::Amount;
+    use penumbra_shielded_pool::Rseed;
     use proptest::prelude::*;
+    use rand_core::OsRng;
+
+    use crate::encryption::Ecies;
+    use crate::note::{commitment, Note};
+    use crate::nullifier::Nullifier;
+    use crate::settlement::proof::{
+        check_circuit_satisfaction, check_satisfaction, SettlementProofConst,
+    };
+    use crate::settlement::{SettlementProofPrivate, SettlementProofPublic};
 
     fn fq_strategy() -> BoxedStrategy<Fq> {
         any::<[u8; 32]>()
@@ -550,17 +569,27 @@ mod tests {
         dest
     }
 
+    fn shared_secret(rseed: &Rseed, addr: &Address) -> SharedSecret {
+        let esk = rseed.derive_esk();
+        let pkd = addr.transmission_key();
+        let shared_secret = esk.key_agreement_with(pkd).unwrap();
+        shared_secret
+    }
+
     prop_compose! {
         fn arb_valid_settlement_statement()(
             seed_phrase_randomness_1 in any::<[u8; 32]>(),
             seed_phrase_randomness_2 in any::<[u8; 32]>(),
-            rseed_randomness in any::<[u8; 32]>(),
+            rseed_randomness_1 in any::<[u8; 32]>(),
+            rseed_randomness_2 in any::<[u8; 32]>(),
             amount in 2u64.., asset_id64 in any::<u64>(),
             address_index_1 in any::<u32>(),
             address_index_2 in any::<u32>()
         ) -> (SettlementProofPublic, SettlementProofPrivate) {
             let dest_debtor = address_from_seed(&seed_phrase_randomness_1, address_index_1);
             let dest_creditor = address_from_seed(&seed_phrase_randomness_2, address_index_2);
+            let rseed_1 = Rseed(rseed_randomness_1);
+            let rseed_2 = Rseed(rseed_randomness_2);
 
             let value_to_send = Value {
                 amount: Amount::from(amount),
@@ -570,7 +599,7 @@ mod tests {
                 dest_debtor.clone(),
                 dest_creditor.clone(),
                 value_to_send,
-                Rseed(rseed_randomness),
+                rseed_1,
             ).expect("should be able to create note");
             let input_note_nullifier_1 = Nullifier::derive(&input_note_1);
 
@@ -578,7 +607,7 @@ mod tests {
                 dest_creditor.clone(),
                 dest_debtor.clone(),
                 value_to_send,
-                Rseed(rseed_randomness),
+                rseed_2,
             ).expect("should be able to create note");
             let input_note_nullifier_2 = Nullifier::derive(&input_note_2);
 
@@ -591,14 +620,14 @@ mod tests {
                 dest_debtor.clone(),
                 dest_creditor.clone(),
                 value_reduced,
-                Rseed(rseed_randomness),
+                rseed_1,
             ).expect("should be able to create note");
             let output_note_commitment_1 = output_note_1.commit();
             let output_note_2 = Note::from_parts(
-                dest_creditor,
-                dest_debtor,
+                dest_creditor.clone(),
+                dest_debtor.clone(),
                 value_reduced,
-                Rseed(rseed_randomness),
+                rseed_2,
             ).expect("should be able to create note");
             let output_note_commitment_2 = output_note_2.commit();
 
@@ -616,16 +645,24 @@ mod tests {
             let input_auth_path_1 = tree.generate_proof(0).unwrap();
             let input_auth_path_2 = tree.generate_proof(1).unwrap();
 
+            // Encrypt output notes
+            let pp = Ecies::setup(&mut OsRng).unwrap();
+            let shared_secret_1 = shared_secret(&rseed_1, &dest_creditor);
+            let msg = serde_json::to_string(&output_note_1).unwrap().into_bytes().to_field_elements().unwrap();
+            let note_ciphertext_1 = Ecies::encrypt(&pp, &Public(shared_secret_1.0), &msg, &Secret::new(&mut OsRng)).unwrap();
+
             let public = SettlementProofPublic {
                 output_notes_commitments: vec![output_note_commitment_1, output_note_commitment_2],
                 nullifiers: vec![input_note_nullifier_1, input_note_nullifier_2],
                 root: tree.root(),
+                note_ciphertexts: vec![note_ciphertext_1],
             };
             let private = SettlementProofPrivate {
                 output_notes: vec![output_note_1, output_note_2],
                 input_notes: vec![input_note_1, input_note_2],
                 setoff_amount: Amount::from(setoff_amount),
-                input_notes_proofs: vec![input_auth_path_1, input_auth_path_2]
+                input_notes_proofs: vec![input_auth_path_1, input_auth_path_2],
+                shared_secrets: vec![shared_secret_1],
             };
 
             (public, private)
@@ -726,13 +763,15 @@ mod tests {
             let bad_public = SettlementProofPublic {
                 output_notes_commitments: vec![output_note_commitment_1, incorrect_output_note_commitment_2],
                 nullifiers: vec![input_note_nullifier_1, input_note_nullifier_2],
-                root: tree.root()
+                root: tree.root(),
+                note_ciphertexts: vec![],
             };
             let private = SettlementProofPrivate {
                 output_notes: vec![output_note_1, output_note_2],
                 input_notes: vec![input_note_1, input_note_2],
                 setoff_amount: Amount::from(setoff_amount),
-                input_notes_proofs: vec![input_auth_path_1, input_auth_path_2]
+                input_notes_proofs: vec![input_auth_path_1, input_auth_path_2],
+                shared_secrets: vec![],
             };
 
             (bad_public, private)
