@@ -170,27 +170,28 @@ impl AsymmetricEncryptionGadget<Ecies, Fq> for EciesEncGadget {
 
 #[cfg(test)]
 mod test {
-    use ark_ed_on_bls12_381::{constraints::EdwardsVar, EdwardsProjective as JubJub, Fq};
+    use ark_crypto_primitives::encryption::{
+        AsymmetricEncryptionGadget, AsymmetricEncryptionScheme,
+    };
     use ark_r1cs_std::prelude::*;
     use ark_relations::r1cs::ConstraintSystem;
-    use ark_std::{test_rng, UniformRand};
+    use decaf377::{Encoding, Fq};
+    use rand_core::OsRng;
 
-    use crate::encryption::constraints::AsymmetricEncryptionGadget;
-    use crate::encryption::elgamal::{constraints::ElGamalEncGadget, ElGamal, Randomness};
-    use crate::encryption::AsymmetricEncryptionScheme;
+    use crate::encryption::{r1cs::EciesEncGadget, Ecies, Randomness};
 
     #[test]
     fn test_elgamal_gadget() {
-        let rng = &mut test_rng();
+        let rng = &mut OsRng;
 
-        type MyEnc = ElGamal<JubJub>;
-        type MyGadget = ElGamalEncGadget<JubJub, EdwardsVar>;
+        type MyEnc = Ecies;
+        type MyGadget = EciesEncGadget;
 
         // compute primitive result
         let parameters = MyEnc::setup(rng).unwrap();
         let (pk, _) = MyEnc::keygen(&parameters, rng).unwrap();
-        let msg = JubJub::rand(rng).into();
-        let randomness = Randomness::rand(rng);
+        let msg: Vec<_> = [0..32].into_iter().map(|_| Fq::rand(rng)).collect();
+        let randomness = Randomness::new(rng);
         let primitive_result = MyEnc::encrypt(&parameters, &pk, &msg, &randomness).unwrap();
 
         // construct constraint system
@@ -233,8 +234,13 @@ mod test {
             .unwrap();
         expected_var.enforce_equal(&result_var).unwrap();
 
-        assert_eq!(primitive_result.0, result_var.c1.value().unwrap());
-        assert_eq!(primitive_result.1, result_var.c2.value().unwrap());
+        assert_eq!(
+            Encoding(primitive_result.0 .0)
+                .vartime_decompress()
+                .unwrap(),
+            result_var.0 .0.value().unwrap()
+        );
+        assert_eq!(primitive_result.1, result_var.1.value().unwrap());
         assert!(cs.is_satisfied().unwrap());
     }
 }
