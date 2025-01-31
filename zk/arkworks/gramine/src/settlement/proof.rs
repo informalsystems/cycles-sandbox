@@ -568,23 +568,24 @@ impl TryFrom<pb::ZkOutputProof> for SettlementProof {
 
 #[cfg(test)]
 mod tests {
-    use ark_ff::ToConstraintField;
-    use arkworks_merkle_tree::poseidontree::Poseidon377MerkleTree;
-    use decaf377::{Encoding, Fq};
-    use penumbra_asset::{asset, Value};
-    use penumbra_keys::keys::{Bip44Path, SeedPhrase, SpendKey};
-    use penumbra_keys::{test_keys, Address};
-    use penumbra_num::Amount;
-    use penumbra_shielded_pool::Rseed;
-    use proptest::prelude::*;
-
-    use crate::encryption::ecies_encrypt;
+    use crate::encryption::{ecies_decrypt, ecies_encrypt};
     use crate::note::{commitment, Note};
     use crate::nullifier::Nullifier;
     use crate::settlement::proof::{
         check_circuit_satisfaction, check_satisfaction, SettlementProofConst,
     };
     use crate::settlement::{SettlementProofPrivate, SettlementProofPublic};
+    use ark_ff::ToConstraintField;
+    use arkworks_merkle_tree::poseidontree::Poseidon377MerkleTree;
+    use decaf377::{Encoding, Fq};
+    use decaf377_ka::Secret;
+    use penumbra_asset::{asset, Value};
+    use penumbra_keys::keys::{Bip44Path, SeedPhrase, SpendKey};
+    use penumbra_keys::{test_keys, Address};
+    use penumbra_num::Amount;
+    use penumbra_shielded_pool::Rseed;
+    use proptest::prelude::*;
+    use rand_core::OsRng;
 
     fn fq_strategy() -> BoxedStrategy<Fq> {
         any::<[u8; 32]>()
@@ -825,5 +826,25 @@ mod tests {
             assert!(check_satisfaction(&public, &private).is_err());
             assert!(check_circuit_satisfaction(public, private).is_err());
         }
+    }
+
+    #[test]
+    fn test_key_enc() {
+        let s1 = Secret::new(&mut OsRng);
+        let s2 = Secret::new(&mut OsRng);
+        let s3 = Secret::new(&mut OsRng);
+
+        let ss_12 = s1.key_agreement_with(&s2.public()).unwrap();
+        let ss_13 = s1.key_agreement_with(&s3.public()).unwrap();
+        let ss_elm_12 = Encoding(ss_12.0).vartime_decompress().unwrap();
+        let ss_elm_13 = Encoding(ss_13.0).vartime_decompress().unwrap();
+        let ss_ciphertext_13 =
+            ecies_encrypt(ss_elm_12, vec![ss_elm_13.vartime_compress_to_field()]).unwrap();
+        let ss_elm_plaintext_13 = ecies_decrypt(ss_elm_12, ss_ciphertext_13).unwrap();
+
+        let ss_elm_13_dec = Encoding(ss_elm_plaintext_13[0].to_bytes())
+            .vartime_decompress()
+            .unwrap();
+        assert_eq!(ss_elm_13_dec, ss_elm_13)
     }
 }
