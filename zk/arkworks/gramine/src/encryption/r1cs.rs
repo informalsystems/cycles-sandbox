@@ -59,21 +59,21 @@ impl EqGadget<Fq> for CiphertextVar {
     }
 }
 
-fn ecies_encrypt(
-    public_key: &SharedSecretVar,
-    message: &PlaintextVar,
+pub fn ecies_encrypt(
+    s: &SharedSecretVar,
+    m: &PlaintextVar,
 ) -> Result<CiphertextVar, SynthesisError> {
     // compute c2 = m + s
     let mut c2 = vec![];
-    let cs = public_key.0.cs();
+    let cs = s.0.cs();
 
     let domain_sep = FqVar::new_constant(cs.clone(), *ENC_DOMAIN_SEP)?;
-    for (i, fq) in message.0.iter().enumerate() {
+    for (i, fq) in m.0.iter().enumerate() {
         let h = poseidon377::r1cs::hash_2(
             cs.clone(),
             &domain_sep,
             (
-                public_key.0.clone().compress_to_field()?,
+                s.0.clone().compress_to_field()?,
                 FqVar::new_constant(cs.clone(), Fq::from(i as u128))?,
             ),
         )?;
@@ -120,42 +120,41 @@ mod test {
     use crate::encryption::r1cs::{CiphertextVar, PlaintextVar, SharedSecretVar};
 
     #[test]
-    fn test_ecies_gadget() {
+    fn test_ecies_encrypt() {
         let rng = &mut OsRng;
 
         // compute primitive result
-        let rseed_1 = Rseed::generate(&mut OsRng);
-        let esk_1 = rseed_1.derive_esk();
-        let addr_1 = test_keys::ADDRESS_1.clone();
-        let pkd_1 = addr_1.transmission_key();
-        let shared_secret_1 = esk_1.key_agreement_with(pkd_1).unwrap();
-        let ss_as_elm_1 = Encoding(shared_secret_1.0).vartime_decompress().unwrap();
-        let msg: Vec<_> = [0..32].into_iter().map(|_| Fq::rand(rng)).collect();
-        let primitive_result = ecies_encrypt(ss_as_elm_1, msg.clone()).unwrap();
+        let s = {
+            let rseed = Rseed::generate(&mut OsRng);
+            let esk = rseed.derive_esk();
+            let addr = test_keys::ADDRESS_1.clone();
+            let pkd = addr.transmission_key();
+            esk.key_agreement_with(pkd).unwrap()
+        };
+        let s_element = Encoding(s.0).vartime_decompress().unwrap();
+        let m: Vec<_> = [0..32].into_iter().map(|_| Fq::rand(rng)).collect();
+        let c2 = ecies_encrypt(s_element, m.clone()).unwrap();
 
         // construct constraint system
         let cs = ConstraintSystem::<Fq>::new_ref();
-        let msg_var =
-            PlaintextVar::new_witness(ark_relations::ns!(cs, "gadget_message"), || Ok(&msg))
-                .unwrap();
-        let pk_var =
+        let m_var =
+            PlaintextVar::new_witness(ark_relations::ns!(cs, "gadget_message"), || Ok(&m)).unwrap();
+        let s_var =
             SharedSecretVar::new_witness(ark_relations::ns!(cs, "gadget_public_key"), || {
-                Ok(&ss_as_elm_1)
+                Ok(&s_element)
             })
             .unwrap();
 
         // use gadget
-        let result_var = super::ecies_encrypt(&pk_var, &msg_var).unwrap();
+        let c2_var = super::ecies_encrypt(&s_var, &m_var).unwrap();
 
         // check that result equals expected ciphertext in the constraint system
-        let expected_var =
-            CiphertextVar::new_input(ark_relations::ns!(cs, "gadget_expected"), || {
-                Ok(&primitive_result)
-            })
-            .unwrap();
-        expected_var.enforce_equal(&result_var).unwrap();
+        let expected_c2_var =
+            CiphertextVar::new_input(ark_relations::ns!(cs, "gadget_expected"), || Ok(&c2))
+                .unwrap();
+        expected_c2_var.enforce_equal(&c2_var).unwrap();
 
-        assert_eq!(primitive_result, result_var.0.value().unwrap());
+        assert_eq!(c2, c2_var.0.value().unwrap());
         assert!(cs.is_satisfied().unwrap());
     }
 }

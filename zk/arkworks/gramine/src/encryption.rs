@@ -12,10 +12,10 @@ pub type SharedSecret = Element;
 pub type Plaintext = Vec<Fq>;
 pub type Ciphertext = Vec<Fq>;
 
-pub fn ecies_encrypt(s: SharedSecret, msg: Plaintext) -> Result<Ciphertext, Error> {
+pub fn ecies_encrypt(s: SharedSecret, m: Plaintext) -> Result<Ciphertext, Error> {
     // compute c2 = m + s
     let mut c2 = vec![];
-    for (i, fq) in msg.into_iter().enumerate() {
+    for (i, fq) in m.into_iter().enumerate() {
         let h = hash_2(
             &ENC_DOMAIN_SEP,
             (s.vartime_compress_to_field(), Fq::from(i as u128)),
@@ -29,17 +29,17 @@ pub fn ecies_encrypt(s: SharedSecret, msg: Plaintext) -> Result<Ciphertext, Erro
 
 pub fn ecies_decrypt(s: SharedSecret, c2: Ciphertext) -> Result<Plaintext, Error> {
     // compute message = c2 - s
-    let mut msg = vec![];
+    let mut m = vec![];
     for (i, fq) in c2.into_iter().enumerate() {
         let h = hash_2(
             &ENC_DOMAIN_SEP,
             (s.vartime_compress_to_field(), Fq::from(i as u128)),
         );
 
-        msg.push(fq - h);
+        m.push(fq - h);
     }
 
-    Ok(msg)
+    Ok(m)
 }
 
 #[cfg(test)]
