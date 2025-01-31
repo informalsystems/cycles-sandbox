@@ -536,7 +536,6 @@ impl TryFrom<pb::ZkOutputProof> for SettlementProof {
 
 #[cfg(test)]
 mod tests {
-    use ark_crypto_primitives::encryption::AsymmetricEncryptionScheme;
     use ark_ff::ToConstraintField;
     use arkworks_merkle_tree::poseidontree::Poseidon377MerkleTree;
     use decaf377::{Encoding, Fq};
@@ -546,9 +545,8 @@ mod tests {
     use penumbra_num::Amount;
     use penumbra_shielded_pool::Rseed;
     use proptest::prelude::*;
-    use rand_core::OsRng;
 
-    use crate::encryption::Ecies;
+    use crate::encryption::ecies_encrypt;
     use crate::note::{commitment, Note};
     use crate::nullifier::Nullifier;
     use crate::settlement::proof::{
@@ -641,18 +639,21 @@ mod tests {
             let input_auth_path_2 = tree.generate_proof(1).unwrap();
 
             // Encrypt output notes
-            let pp = Ecies::setup(&mut OsRng).unwrap();
             let esk_1 = rseed_1.derive_esk();
             let pkd_1 = dest_creditor.transmission_key();
+            let shared_secret_1 = esk_1.key_agreement_with(pkd_1).unwrap();
+            let ss_as_elm_1 = Encoding(shared_secret_1.0).vartime_decompress().unwrap();
+            let ss_as_fq_1 = Encoding(shared_secret_1.0).vartime_decompress().unwrap().vartime_compress_to_field();
             let msg = serde_json::to_string(&output_note_1).unwrap().into_bytes().to_field_elements().unwrap();
-            let note_ciphertext_1 = Ecies::encrypt(&pp, &pkd_1, &msg, &esk_1).unwrap();
+            let note_ciphertext_1 = ecies_encrypt(ss_as_elm_1, msg).unwrap();
 
             // Encrypt shared secret to solver
             // let epk_1 = esk_1.public();
-            let shared_secret_1 = esk_1.key_agreement_with(pkd_1).unwrap();
             let addr_solver = test_keys::ADDRESS_0.clone();
-            let ss_as_fq = Encoding(shared_secret_1.0).vartime_decompress().unwrap().vartime_compress_to_field();
-            let ss_ciphertext_1 = Ecies::encrypt(&pp, &addr_solver.transmission_key(), &vec![ss_as_fq], &esk_1).unwrap();
+            let pkd_solver = addr_solver.transmission_key();
+            let ss_solver_1 = esk_1.key_agreement_with(pkd_solver).unwrap();
+            let ss_solver_as_elm_1 = Encoding(ss_solver_1.0).vartime_decompress().unwrap();
+            let ss_ciphertext_1 = ecies_encrypt(ss_solver_as_elm_1, vec![ss_as_fq_1]).unwrap();
 
             let public = SettlementProofPublic {
                 output_notes_commitments: vec![output_note_commitment_1, output_note_commitment_2],
