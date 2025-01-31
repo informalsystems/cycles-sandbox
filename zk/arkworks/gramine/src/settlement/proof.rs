@@ -16,9 +16,10 @@ use arkworks_merkle_tree::poseidontree::{
     RootVar, TwoToOneHashParams,
 };
 use base64::prelude::*;
-use decaf377::{Bls12_377, Fq};
+use decaf377::{Bls12_377, Encoding, Fq};
 use decaf377_fmd as fmd;
 use decaf377_ka as ka;
+use decaf377_ka::Public;
 use penumbra_asset::Value;
 use penumbra_keys::keys::IncomingViewingKey;
 use penumbra_keys::{keys::Diversifier, test_keys, Address};
@@ -30,7 +31,7 @@ use penumbra_tct::r1cs::StateCommitmentVar;
 use poseidon377::{RATE_1_PARAMS, RATE_2_PARAMS};
 use poseidon_parameters::v1::Matrix;
 
-use crate::encryption::Ciphertext;
+use crate::encryption::{ecies_decrypt, ecies_encrypt, Ciphertext};
 use crate::note::r1cs::enforce_equal_addresses;
 use crate::note::{r1cs::NoteVar, Note};
 use crate::nullifier::{Nullifier, NullifierVar};
@@ -48,6 +49,8 @@ pub struct SettlementProofPublic {
     pub note_ciphertexts: Vec<Ciphertext>,
     /// Shared secret ciphertexts encrypted using the note's shared secret.
     pub ss_ciphertexts: Vec<Ciphertext>,
+    /// Note ephemeral public keys.
+    pub note_epks: Vec<Public>,
 }
 
 /// The private input for an [`SettlementProof`].
@@ -208,6 +211,34 @@ fn check_satisfaction(
         expected_output_notes >= public.output_notes_commitments,
         "expected output notes do not match claimed"
     );
+
+    // prove output notes were encrypted to same shared secret as input notes (or equivalently ss_ciphertexts)
+    let mut shared_secrets = vec![];
+    for (ss_ciphertext, epk) in public.ss_ciphertexts.iter().zip(public.note_epks.iter()) {
+        let s_tee = {
+            let ss = private.solver_ivk.key_agreement_with(epk)?;
+            Encoding(ss.0)
+                .vartime_decompress()
+                .map_err(|e| anyhow::anyhow!(e))?
+        };
+        let s = {
+            let s_plaintext_fq_vec = ecies_decrypt(s_tee.clone(), ss_ciphertext.clone())?;
+            let s_fq = s_plaintext_fq_vec.first().unwrap();
+            let s = Encoding(s_fq.to_bytes()).vartime_decompress().unwrap();
+            s
+        };
+        shared_secrets.push(s);
+    }
+    for ((output_note, shared_secret), expected_ciphertext) in private
+        .output_notes
+        .iter()
+        .zip(shared_secrets.iter())
+        .zip(public.note_ciphertexts.iter())
+    {
+        let output_note = output_note.to_field_elements().unwrap();
+        let ciphertext = ecies_encrypt(shared_secret.clone(), output_note)?;
+        anyhow::ensure!(&ciphertext == expected_ciphertext);
+    }
 
     Ok(())
 }
@@ -425,6 +456,7 @@ impl DummyWitness for SettlementCircuit {
             root: tree.root(),
             note_ciphertexts: vec![],
             ss_ciphertexts: vec![],
+            note_epks: vec![],
         };
         let private = SettlementProofPrivate {
             output_notes: vec![note.clone()],
@@ -643,12 +675,12 @@ mod tests {
             let pkd_1 = dest_creditor.transmission_key();
             let shared_secret_1 = esk_1.key_agreement_with(pkd_1).unwrap();
             let ss_as_elm_1 = Encoding(shared_secret_1.0).vartime_decompress().unwrap();
-            let ss_as_fq_1 = Encoding(shared_secret_1.0).vartime_decompress().unwrap().vartime_compress_to_field();
+            let ss_as_fq_1 = ss_as_elm_1.vartime_compress_to_field();
             let msg = serde_json::to_string(&output_note_1).unwrap().into_bytes().to_field_elements().unwrap();
             let note_ciphertext_1 = ecies_encrypt(ss_as_elm_1, msg).unwrap();
 
             // Encrypt shared secret to solver
-            // let epk_1 = esk_1.public();
+            let epk_1 = esk_1.diversified_public(&dest_debtor.diversifier().diversified_generator());
             let addr_solver = test_keys::ADDRESS_0.clone();
             let pkd_solver = addr_solver.transmission_key();
             let ss_solver_1 = esk_1.key_agreement_with(pkd_solver).unwrap();
@@ -661,6 +693,7 @@ mod tests {
                 root: tree.root(),
                 note_ciphertexts: vec![note_ciphertext_1],
                 ss_ciphertexts: vec![ss_ciphertext_1],
+                note_epks: vec![epk_1],
             };
             let private = SettlementProofPrivate {
                 output_notes: vec![output_note_1, output_note_2],
@@ -771,6 +804,7 @@ mod tests {
                 root: tree.root(),
                 note_ciphertexts: vec![],
                 ss_ciphertexts: vec![],
+                note_epks: vec![],
             };
             let private = SettlementProofPrivate {
                 output_notes: vec![output_note_1, output_note_2],
