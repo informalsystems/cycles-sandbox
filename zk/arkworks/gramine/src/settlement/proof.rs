@@ -19,7 +19,6 @@ use base64::prelude::*;
 use decaf377::{Bls12_377, Fq};
 use decaf377_fmd as fmd;
 use decaf377_ka as ka;
-use decaf377_ka::SharedSecret;
 use penumbra_asset::Value;
 use penumbra_keys::{keys::Diversifier, Address};
 use penumbra_num::{Amount, AmountVar};
@@ -44,8 +43,10 @@ pub struct SettlementProofPublic {
     pub nullifiers: Vec<Nullifier>,
     /// These are the public inputs to the circuit merkle tree verification circuit
     pub root: Root,
-    /// Note ciphertexts encrypted using the note's shared secret.
+    /// Note ciphertexts encrypted using the note's esk.
     pub note_ciphertexts: Vec<Ciphertext>,
+    /// Shared secret ciphertexts encrypted using the note's shared secret.
+    pub ss_ciphertexts: Vec<Ciphertext>,
 }
 
 /// The private input for an [`SettlementProof`].
@@ -59,8 +60,6 @@ pub struct SettlementProofPrivate {
     pub input_notes_proofs: Vec<Poseidon377MerklePath>,
     /// Setoff amount for this cycle.
     pub setoff_amount: Amount,
-    /// Shared secret used to encrypt the note.
-    pub shared_secrets: Vec<SharedSecret>,
 }
 
 /// The const input for an [`SettlementProof`].
@@ -422,13 +421,13 @@ impl DummyWitness for SettlementCircuit {
             nullifiers: vec![Nullifier::derive(&note)],
             root: tree.root(),
             note_ciphertexts: vec![],
+            ss_ciphertexts: vec![],
         };
         let private = SettlementProofPrivate {
             output_notes: vec![note.clone()],
             input_notes: vec![note],
             setoff_amount: Amount::zero(),
             input_notes_proofs: vec![auth_path],
-            shared_secrets: vec![SharedSecret([1; 32])],
         };
 
         SettlementCircuit { public, private }
@@ -536,11 +535,10 @@ mod tests {
     use ark_crypto_primitives::encryption::AsymmetricEncryptionScheme;
     use ark_ff::ToConstraintField;
     use arkworks_merkle_tree::poseidontree::Poseidon377MerkleTree;
-    use decaf377::Fq;
-    use decaf377_ka::{Public, Secret, SharedSecret};
+    use decaf377::{Encoding, Fq};
     use penumbra_asset::{asset, Value};
     use penumbra_keys::keys::{Bip44Path, SeedPhrase, SpendKey};
-    use penumbra_keys::Address;
+    use penumbra_keys::{test_keys, Address};
     use penumbra_num::Amount;
     use penumbra_shielded_pool::Rseed;
     use proptest::prelude::*;
@@ -567,13 +565,6 @@ mod tests {
         let ivk_recipient = fvk_recipient.incoming();
         let (dest, _dtk_d) = ivk_recipient.payment_address(index.into());
         dest
-    }
-
-    fn shared_secret(rseed: &Rseed, addr: &Address) -> SharedSecret {
-        let esk = rseed.derive_esk();
-        let pkd = addr.transmission_key();
-        let shared_secret = esk.key_agreement_with(pkd).unwrap();
-        shared_secret
     }
 
     prop_compose! {
@@ -647,22 +638,30 @@ mod tests {
 
             // Encrypt output notes
             let pp = Ecies::setup(&mut OsRng).unwrap();
-            let shared_secret_1 = shared_secret(&rseed_1, &dest_creditor);
+            let esk_1 = rseed_1.derive_esk();
+            let pkd_1 = dest_creditor.transmission_key();
             let msg = serde_json::to_string(&output_note_1).unwrap().into_bytes().to_field_elements().unwrap();
-            let note_ciphertext_1 = Ecies::encrypt(&pp, &Public(shared_secret_1.0), &msg, &Secret::new(&mut OsRng)).unwrap();
+            let note_ciphertext_1 = Ecies::encrypt(&pp, &pkd_1, &msg, &esk_1).unwrap();
+
+            // Encrypt shared secret to solver
+            // let epk_1 = esk_1.public();
+            let shared_secret_1 = esk_1.key_agreement_with(pkd_1).unwrap();
+            let addr_solver = test_keys::ADDRESS_0.clone();
+            let ss_as_fq = Encoding(shared_secret_1.0).vartime_decompress().unwrap().vartime_compress_to_field();
+            let ss_ciphertext_1 = Ecies::encrypt(&pp, &addr_solver.transmission_key(), &vec![ss_as_fq], &esk_1).unwrap();
 
             let public = SettlementProofPublic {
                 output_notes_commitments: vec![output_note_commitment_1, output_note_commitment_2],
                 nullifiers: vec![input_note_nullifier_1, input_note_nullifier_2],
                 root: tree.root(),
                 note_ciphertexts: vec![note_ciphertext_1],
+                ss_ciphertexts: vec![ss_ciphertext_1],
             };
             let private = SettlementProofPrivate {
                 output_notes: vec![output_note_1, output_note_2],
                 input_notes: vec![input_note_1, input_note_2],
                 setoff_amount: Amount::from(setoff_amount),
                 input_notes_proofs: vec![input_auth_path_1, input_auth_path_2],
-                shared_secrets: vec![shared_secret_1],
             };
 
             (public, private)
@@ -765,13 +764,13 @@ mod tests {
                 nullifiers: vec![input_note_nullifier_1, input_note_nullifier_2],
                 root: tree.root(),
                 note_ciphertexts: vec![],
+                ss_ciphertexts: vec![],
             };
             let private = SettlementProofPrivate {
                 output_notes: vec![output_note_1, output_note_2],
                 input_notes: vec![input_note_1, input_note_2],
                 setoff_amount: Amount::from(setoff_amount),
                 input_notes_proofs: vec![input_auth_path_1, input_auth_path_2],
-                shared_secrets: vec![],
             };
 
             (bad_public, private)
