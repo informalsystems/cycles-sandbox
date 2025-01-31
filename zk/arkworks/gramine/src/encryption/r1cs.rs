@@ -22,9 +22,9 @@ impl AllocVar<Plaintext, Fq> for PlaintextVar {
 }
 
 #[derive(Clone, Debug)]
-pub struct PublicKeyVar(pub ElementVar);
+pub struct SharedSecretVar(pub ElementVar);
 
-impl AllocVar<SharedSecret, Fq> for PublicKeyVar {
+impl AllocVar<SharedSecret, Fq> for SharedSecretVar {
     fn new_variable<T: Borrow<SharedSecret>>(
         cs: impl Into<Namespace<Fq>>,
         f: impl FnOnce() -> Result<T, SynthesisError>,
@@ -60,7 +60,7 @@ impl EqGadget<Fq> for CiphertextVar {
 }
 
 fn ecies_encrypt(
-    public_key: &PublicKeyVar,
+    public_key: &SharedSecretVar,
     message: &PlaintextVar,
 ) -> Result<CiphertextVar, SynthesisError> {
     // compute c2 = m + s
@@ -93,7 +93,7 @@ mod test {
     use rand_core::OsRng;
 
     use crate::encryption::ecies_encrypt;
-    use crate::encryption::r1cs::{CiphertextVar, PlaintextVar, PublicKeyVar};
+    use crate::encryption::r1cs::{CiphertextVar, PlaintextVar, SharedSecretVar};
 
     #[test]
     fn test_ecies_gadget() {
@@ -114,10 +114,11 @@ mod test {
         let msg_var =
             PlaintextVar::new_witness(ark_relations::ns!(cs, "gadget_message"), || Ok(&msg))
                 .unwrap();
-        let pk_var = PublicKeyVar::new_witness(ark_relations::ns!(cs, "gadget_public_key"), || {
-            Ok(&ss_as_elm_1)
-        })
-        .unwrap();
+        let pk_var =
+            SharedSecretVar::new_witness(ark_relations::ns!(cs, "gadget_public_key"), || {
+                Ok(&ss_as_elm_1)
+            })
+            .unwrap();
 
         // use gadget
         let result_var = super::ecies_encrypt(&pk_var, &msg_var).unwrap();
