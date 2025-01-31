@@ -20,7 +20,8 @@ use decaf377::{Bls12_377, Fq};
 use decaf377_fmd as fmd;
 use decaf377_ka as ka;
 use penumbra_asset::Value;
-use penumbra_keys::{keys::Diversifier, Address};
+use penumbra_keys::keys::IncomingViewingKey;
+use penumbra_keys::{keys::Diversifier, test_keys, Address};
 use penumbra_num::{Amount, AmountVar};
 use penumbra_proof_params::{DummyWitness, VerifyingKeyExt, GROTH16_PROOF_LENGTH_BYTES};
 use penumbra_proto::{penumbra::core::component::shielded_pool::v1 as pb, DomainType};
@@ -60,6 +61,8 @@ pub struct SettlementProofPrivate {
     pub input_notes_proofs: Vec<Poseidon377MerklePath>,
     /// Setoff amount for this cycle.
     pub setoff_amount: Amount,
+    /// Solver's viewing key
+    pub solver_ivk: IncomingViewingKey,
 }
 
 /// The const input for an [`SettlementProof`].
@@ -428,6 +431,7 @@ impl DummyWitness for SettlementCircuit {
             input_notes: vec![note],
             setoff_amount: Amount::zero(),
             input_notes_proofs: vec![auth_path],
+            solver_ivk: test_keys::FULL_VIEWING_KEY.incoming().clone(),
         };
 
         SettlementCircuit { public, private }
@@ -662,6 +666,7 @@ mod tests {
                 input_notes: vec![input_note_1, input_note_2],
                 setoff_amount: Amount::from(setoff_amount),
                 input_notes_proofs: vec![input_auth_path_1, input_auth_path_2],
+                solver_ivk: test_keys::FULL_VIEWING_KEY.incoming().clone(),
             };
 
             (public, private)
@@ -771,6 +776,7 @@ mod tests {
                 input_notes: vec![input_note_1, input_note_2],
                 setoff_amount: Amount::from(setoff_amount),
                 input_notes_proofs: vec![input_auth_path_1, input_auth_path_2],
+                solver_ivk: test_keys::FULL_VIEWING_KEY.incoming().clone(),
             };
 
             (bad_public, private)

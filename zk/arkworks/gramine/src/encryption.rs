@@ -65,6 +65,7 @@ impl AsymmetricEncryptionScheme for Ecies {
 
 pub fn ecies_encrypt(pk: Public, r: &Secret, msg: Vec<Fq>) -> Result<(Public, Vec<Fq>), Error> {
     // compute s = r * pk
+    // FIXME: use the diversified_generator here
     let s = Encoding(r.key_agreement_with(&pk)?.0)
         .vartime_decompress()
         .map_err(|_| Error::InvalidPublic(pk))?;
