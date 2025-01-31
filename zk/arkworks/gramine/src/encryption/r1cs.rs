@@ -83,6 +83,30 @@ fn ecies_encrypt(
     Ok(CiphertextVar(c2))
 }
 
+pub fn ecies_decrypt(
+    s: &SharedSecretVar,
+    c2: &CiphertextVar,
+) -> Result<PlaintextVar, SynthesisError> {
+    // compute c2 = m + s
+    let mut m = vec![];
+    let cs = s.0.cs();
+
+    let domain_sep = FqVar::new_constant(cs.clone(), *ENC_DOMAIN_SEP)?;
+    for (i, fq) in c2.0.iter().enumerate() {
+        let h = poseidon377::r1cs::hash_2(
+            cs.clone(),
+            &domain_sep,
+            (
+                s.0.clone().compress_to_field()?,
+                FqVar::new_constant(cs.clone(), Fq::from(i as u128))?,
+            ),
+        )?;
+        m.push(fq - h);
+    }
+
+    Ok(PlaintextVar(m))
+}
+
 #[cfg(test)]
 mod test {
     use ark_r1cs_std::prelude::*;
