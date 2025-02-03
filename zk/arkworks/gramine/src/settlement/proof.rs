@@ -872,12 +872,12 @@ mod tests {
             ecies_encrypt(d_s_ss_enc, vec![d_c_ss_enc.vartime_compress_to_field()]).unwrap();
 
         // 5. debtor sends `e_pk` and `d_c_ss_ct` to solver (over the blockchain)
-        let e_pk = e_sk.public();
+        let e_pk = e_sk.diversified_public(s_addr.diversified_generator());
 
         // 6. solver performs DHKE using `e_pk` to obtain the debtor-solver-shared-secret (i.e. `s_d_ss`)
         let s_ivk = test_keys::FULL_VIEWING_KEY.incoming();
         let s_d_ss = s_ivk.key_agreement_with(&e_pk).unwrap();
-        assert_eq!(s_d_ss, s_d_ss);
+        assert_eq!(s_d_ss, d_s_ss);
 
         // 7. solver decrypts `d_c_ss_ct` to obtain `d_c_ss`
         let s_d_ss_enc = Encoding(s_d_ss.0).vartime_decompress().unwrap();
@@ -890,5 +890,17 @@ mod tests {
             d_c_ss,
             SharedSecret::try_from(d_c_ss_pt[0].to_bytes()).unwrap()
         );
+    }
+
+    #[test]
+    fn test_dhke() {
+        let e_sk = Rseed::generate(&mut OsRng).derive_esk();
+        let s_addr = test_keys::ADDRESS_0.clone();
+        let s_pk = s_addr.transmission_key();
+        let d_s_ss = e_sk.key_agreement_with(s_pk).unwrap();
+        let e_pk = e_sk.diversified_public(s_addr.diversified_generator());
+        let s_ivk = test_keys::FULL_VIEWING_KEY.incoming();
+        let s_d_ss = s_ivk.key_agreement_with(&e_pk).unwrap();
+        assert_eq!(s_d_ss, d_s_ss);
     }
 }
