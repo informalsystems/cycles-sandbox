@@ -612,53 +612,53 @@ mod tests {
             address_index_1 in any::<u32>(),
             address_index_2 in any::<u32>()
         ) -> (SettlementProofPublic, SettlementProofPrivate) {
-            let dest_debtor = address_from_seed(&seed_phrase_randomness_1, address_index_1);
-            let dest_creditor = address_from_seed(&seed_phrase_randomness_2, address_index_2);
-            let rseed_1 = Rseed(rseed_randomness_1);
-            let rseed_2 = Rseed(rseed_randomness_2);
+            let d_addr = address_from_seed(&seed_phrase_randomness_1, address_index_1);
+            let c_addr = address_from_seed(&seed_phrase_randomness_2, address_index_2);
+            let d_c_inote_rseed = Rseed(rseed_randomness_1);
+            let c_d_inote_rseed = Rseed(rseed_randomness_2);
 
             let value_to_send = Value {
                 amount: Amount::from(amount),
                 asset_id: asset::Id(Fq::from(asset_id64)),
             };
-            let input_note_1 = Note::from_parts(
-                dest_debtor.clone(),
-                dest_creditor.clone(),
+            let d_c_inote = Note::from_parts(
+                d_addr.clone(),
+                c_addr.clone(),
                 value_to_send,
-                rseed_1,
+                d_c_inote_rseed,
             ).expect("should be able to create note");
-            let input_note_nullifier_1 = Nullifier::derive(&input_note_1);
+            let d_c_inote_nul = Nullifier::derive(&d_c_inote);
 
-            let input_note_2 = Note::from_parts(
-                dest_creditor.clone(),
-                dest_debtor.clone(),
+            let c_d_inote = Note::from_parts(
+                c_addr.clone(),
+                d_addr.clone(),
                 value_to_send,
-                rseed_2,
+                c_d_inote_rseed,
             ).expect("should be able to create note");
-            let input_note_nullifier_2 = Nullifier::derive(&input_note_2);
+            let c_d_inote_nul = Nullifier::derive(&c_d_inote);
 
             let setoff_amount = amount;
             let value_reduced = Value {
                 amount: Amount::from(amount - setoff_amount),
                 asset_id: asset::Id(Fq::from(asset_id64)),
             };
-            let output_note_1 = Note::from_parts(
-                dest_debtor.clone(),
-                dest_creditor.clone(),
+            let d_c_onote = Note::from_parts(
+                d_addr.clone(),
+                c_addr.clone(),
                 value_reduced,
-                rseed_1,
+                d_c_inote_rseed,
             ).expect("should be able to create note");
-            let output_note_commitment_1 = output_note_1.commit();
-            let output_note_2 = Note::from_parts(
-                dest_creditor.clone(),
-                dest_debtor.clone(),
+            let d_c_onote_comm = d_c_onote.commit();
+            let c_d_onote = Note::from_parts(
+                c_addr.clone(),
+                d_addr.clone(),
                 value_reduced,
-                rseed_2,
+                c_d_inote_rseed,
             ).expect("should be able to create note");
-            let output_note_commitment_2 = output_note_2.commit();
+            let c_d_onote_comm = c_d_onote.commit();
 
             let constants = SettlementProofConst::default();
-            let leaves: Vec<[Fq; 1]> = vec![[input_note_1.commit().0], [input_note_2.commit().0]];
+            let leaves: Vec<[Fq; 1]> = vec![[d_c_inote.commit().0], [c_d_inote.commit().0]];
             // Build tree with our one dummy note in order to get the merkle root value
             let tree = Poseidon377MerkleTree::new(
                 &constants.leaf_crh_params,
@@ -672,33 +672,32 @@ mod tests {
             let input_auth_path_2 = tree.generate_proof(1).unwrap();
 
             // Encrypt output notes
-            let esk_1 = rseed_1.derive_esk();
-            let pkd_1 = dest_creditor.transmission_key();
-            let shared_secret_1 = esk_1.key_agreement_with(pkd_1).unwrap();
-            let ss_as_elm_1 = Encoding(shared_secret_1.0).vartime_decompress().unwrap();
-            let ss_as_fq_1 = ss_as_elm_1.vartime_compress_to_field();
-            let msg = serde_json::to_string(&output_note_1).unwrap().into_bytes().to_field_elements().unwrap();
-            let note_ciphertext_1 = ecies_encrypt(ss_as_elm_1, msg).unwrap();
+            let e_sk = d_c_inote_rseed.derive_esk();
+            let c_pk = c_addr.transmission_key();
+            let d_c_ss = e_sk.key_agreement_with(c_pk).unwrap();
+            let d_c_ss_enc = Encoding(d_c_ss.0).vartime_decompress().unwrap();
+            let d_c_onote_ser = d_c_onote.to_field_elements().unwrap();
+            let d_c_onote_ct = ecies_encrypt(d_c_ss_enc, d_c_onote_ser).unwrap();
 
             // Encrypt shared secret to solver
-            let epk_1 = esk_1.diversified_public(&dest_debtor.diversifier().diversified_generator());
-            let addr_solver = test_keys::ADDRESS_0.clone();
-            let pkd_solver = addr_solver.transmission_key();
-            let ss_solver_1 = esk_1.key_agreement_with(pkd_solver).unwrap();
-            let ss_solver_as_elm_1 = Encoding(ss_solver_1.0).vartime_decompress().unwrap();
-            let ss_ciphertext_1 = ecies_encrypt(ss_solver_as_elm_1, vec![ss_as_fq_1]).unwrap();
+            let s_addr = test_keys::ADDRESS_0.clone();
+            let e_pk = e_sk.diversified_public(&s_addr.diversified_generator());
+            let s_pk = s_addr.transmission_key();
+            let d_s_ss = e_sk.key_agreement_with(s_pk).unwrap();
+            let d_s_ss_enc = Encoding(d_s_ss.0).vartime_decompress().unwrap();
+            let d_c_ss_ct = ecies_encrypt(d_s_ss_enc, vec![d_c_ss_enc.vartime_compress_to_field()]).unwrap();
 
             let public = SettlementProofPublic {
-                output_notes_commitments: vec![output_note_commitment_1, output_note_commitment_2],
-                nullifiers: vec![input_note_nullifier_1, input_note_nullifier_2],
+                output_notes_commitments: vec![d_c_onote_comm, c_d_onote_comm],
+                nullifiers: vec![d_c_inote_nul, c_d_inote_nul],
                 root: tree.root(),
-                note_ciphertexts: vec![note_ciphertext_1],
-                ss_ciphertexts: vec![ss_ciphertext_1],
-                note_epks: vec![epk_1],
+                note_ciphertexts: vec![d_c_onote_ct],
+                ss_ciphertexts: vec![d_c_ss_ct],
+                note_epks: vec![e_pk],
             };
             let private = SettlementProofPrivate {
-                output_notes: vec![output_note_1, output_note_2],
-                input_notes: vec![input_note_1, input_note_2],
+                output_notes: vec![d_c_onote, c_d_onote],
+                input_notes: vec![d_c_inote, c_d_inote],
                 setoff_amount: Amount::from(setoff_amount),
                 input_notes_proofs: vec![input_auth_path_1, input_auth_path_2],
                 solver_ivk: test_keys::FULL_VIEWING_KEY.incoming().clone(),
@@ -734,58 +733,58 @@ mod tests {
             address_index_2 in any::<u32>(),
             incorrect_note_blinding in fq_strategy()
         ) -> (SettlementProofPublic, SettlementProofPrivate) {
-            let dest_debtor = address_from_seed(&seed_phrase_randomness_1, address_index_1);
-            let dest_creditor = address_from_seed(&seed_phrase_randomness_2, address_index_2);
+            let d_addr = address_from_seed(&seed_phrase_randomness_1, address_index_1);
+            let c_addr = address_from_seed(&seed_phrase_randomness_2, address_index_2);
 
             let value_to_send = Value {
                 amount: Amount::from(amount),
                 asset_id: asset::Id(Fq::from(asset_id64)),
             };
-            let input_note_1 = Note::from_parts(
-                dest_debtor.clone(),
-                dest_creditor.clone(),
+            let d_c_inote = Note::from_parts(
+                d_addr.clone(),
+                c_addr.clone(),
                 value_to_send,
                 Rseed(rseed_randomness),
             ).expect("should be able to create note");
-            let input_note_nullifier_1 = Nullifier::derive(&input_note_1);
+            let d_c_inote_nul = Nullifier::derive(&d_c_inote);
 
-            let input_note_2 = Note::from_parts(
-                dest_creditor.clone(),
-                dest_debtor.clone(),
+            let c_d_inote = Note::from_parts(
+                c_addr.clone(),
+                d_addr.clone(),
                 value_to_send,
                 Rseed(rseed_randomness),
             ).expect("should be able to create note");
-            let input_note_nullifier_2 = Nullifier::derive(&input_note_2);
+            let c_d_inote_nul = Nullifier::derive(&c_d_inote);
 
             let setoff_amount = amount;
             let value_reduced = Value {
                 amount: Amount::from(amount - setoff_amount),
                 asset_id: asset::Id(Fq::from(asset_id64)),
             };
-            let output_note_1 = Note::from_parts(
-                dest_debtor.clone(),
-                dest_creditor.clone(),
+            let d_c_onote = Note::from_parts(
+                d_addr.clone(),
+                c_addr.clone(),
                 value_reduced,
                 Rseed(rseed_randomness),
             ).expect("should be able to create note");
-            let output_note_commitment_1 = output_note_1.commit();
-            let output_note_2 = Note::from_parts(
-                dest_creditor,
-                dest_debtor,
+            let d_c_onote_comm = d_c_onote.commit();
+            let c_d_onote = Note::from_parts(
+                c_addr,
+                d_addr,
                 value_reduced,
                 Rseed(rseed_randomness),
             ).expect("should be able to create note");
-            let incorrect_output_note_commitment_2 = commitment(
+            let incorrect_c_d_onote_comm = commitment(
                 incorrect_note_blinding,
                 value_to_send,
-                output_note_2.diversified_generator(),
-                output_note_2.transmission_key_s(),
-                output_note_2.clue_key(),
-                output_note_2.creditor().transmission_key_s().clone()
+                c_d_onote.diversified_generator(),
+                c_d_onote.transmission_key_s(),
+                c_d_onote.clue_key(),
+                c_d_onote.creditor().transmission_key_s().clone()
             );
 
             let constants = SettlementProofConst::default();
-            let leaves: Vec<[Fq; 1]> = vec![[input_note_1.commit().0], [input_note_2.commit().0]];
+            let leaves: Vec<[Fq; 1]> = vec![[d_c_inote.commit().0], [c_d_inote.commit().0]];
 
             // Build tree with our one dummy note in order to get the merkle root value
             let tree = Poseidon377MerkleTree::new(
@@ -800,16 +799,16 @@ mod tests {
             let input_auth_path_2 = tree.generate_proof(1).unwrap();
 
             let bad_public = SettlementProofPublic {
-                output_notes_commitments: vec![output_note_commitment_1, incorrect_output_note_commitment_2],
-                nullifiers: vec![input_note_nullifier_1, input_note_nullifier_2],
+                output_notes_commitments: vec![d_c_onote_comm, incorrect_c_d_onote_comm],
+                nullifiers: vec![d_c_inote_nul, c_d_inote_nul],
                 root: tree.root(),
                 note_ciphertexts: vec![],
                 ss_ciphertexts: vec![],
                 note_epks: vec![],
             };
             let private = SettlementProofPrivate {
-                output_notes: vec![output_note_1, output_note_2],
-                input_notes: vec![input_note_1, input_note_2],
+                output_notes: vec![d_c_onote, c_d_onote],
+                input_notes: vec![d_c_inote, c_d_inote],
                 setoff_amount: Amount::from(setoff_amount),
                 input_notes_proofs: vec![input_auth_path_1, input_auth_path_2],
                 solver_ivk: test_keys::FULL_VIEWING_KEY.incoming().clone(),
@@ -840,9 +839,9 @@ mod tests {
         let ss_13 = s1.key_agreement_with(&p3).unwrap();
         let ss_elm_12 = Encoding(ss_12.0).vartime_decompress().unwrap();
         let ss_elm_13 = Encoding(ss_13.0).vartime_decompress().unwrap();
-        let ss_ciphertext_12 =
+        let d_c_ss_ct2 =
             ecies_encrypt(ss_elm_13, vec![ss_elm_12.vartime_compress_to_field()]).unwrap();
-        let ss_elm_plaintext_12 = ecies_decrypt(ss_elm_13, ss_ciphertext_12).unwrap();
+        let ss_elm_plaintext_12 = ecies_decrypt(ss_elm_13, d_c_ss_ct2).unwrap();
 
         let ss_elm_12_dec = Encoding(ss_elm_plaintext_12[0].to_bytes())
             .vartime_decompress()
