@@ -85,7 +85,7 @@ impl AllocVar<Public, Fq> for PublicKeyVar {
             let pk = *f()?.borrow();
             Encoding(pk.0)
                 .vartime_decompress()
-                .map_err(|e| SynthesisError::UnexpectedIdentity)?
+                .map_err(|_| SynthesisError::UnexpectedIdentity)?
         };
         let pk_var = ElementVar::new_variable(cs, || Ok(pk), mode)?;
         Ok(Self(pk_var))
