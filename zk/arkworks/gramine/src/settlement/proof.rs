@@ -676,8 +676,7 @@ mod tests {
             let c_pk = c_addr.transmission_key();
             let d_c_ss = e_sk.key_agreement_with(c_pk).unwrap();
             let d_c_ss_enc = Encoding(d_c_ss.0).vartime_decompress().unwrap();
-            let d_c_onote_ser = d_c_onote.to_field_elements().unwrap();
-            let d_c_onote_ct = ecies_encrypt(d_c_ss_enc, d_c_onote_ser).unwrap();
+            let d_c_onote_ct = ecies_encrypt(d_c_ss_enc, d_c_onote.to_field_elements().unwrap()).unwrap();
 
             // Encrypt shared secret to solver
             let s_addr = test_keys::ADDRESS_0.clone();
