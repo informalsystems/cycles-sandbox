@@ -4,7 +4,7 @@ use std::str::FromStr;
 use anyhow::Result;
 use ark_crypto_primitives::crh::poseidon::constraints::CRHParametersVar;
 use ark_crypto_primitives::sponge::poseidon::PoseidonConfig;
-use ark_ff::ToConstraintField;
+use ark_ff::{ToConstraintField, Zero};
 use ark_groth16::r1cs_to_qap::LibsnarkReduction;
 use ark_groth16::{Groth16, PreparedVerifyingKey, Proof, ProvingKey};
 use ark_r1cs_std::prelude::*;
@@ -16,6 +16,7 @@ use arkworks_merkle_tree::poseidontree::{
     RootVar, TwoToOneHashParams,
 };
 use base64::prelude::*;
+use decaf377::r1cs::FqVar;
 use decaf377::{Bls12_377, Fq};
 use decaf377_fmd as fmd;
 use decaf377_ka as ka;
@@ -26,7 +27,7 @@ use penumbra_proof_params::{DummyWitness, VerifyingKeyExt, GROTH16_PROOF_LENGTH_
 use penumbra_proto::{penumbra::core::component::shielded_pool::v1 as pb, DomainType};
 use penumbra_shielded_pool::{note, Rseed};
 use penumbra_tct::r1cs::StateCommitmentVar;
-use poseidon377::{RATE_1_PARAMS, RATE_2_PARAMS};
+use poseidon377::{RATE_1_PARAMS, RATE_2_PARAMS, RATE_3_PARAMS, RATE_7_PARAMS};
 use poseidon_parameters::v1::Matrix;
 
 use crate::note::r1cs::enforce_equal_addresses;
@@ -36,6 +37,12 @@ use crate::nullifier::{Nullifier, NullifierVar};
 /// The public input for an [`SettlementProof`].
 #[derive(Clone, Debug)]
 pub struct SettlementProofPublic {
+    pub pub_inputs_hash: Fq
+}
+
+/// *** Public inputs included along with the private inputs, but represented publicly with their hash ***
+#[derive(Clone, Debug)]
+pub struct SettlementProofUncompressedPublic {
     /// A hiding commitment to output notes.
     pub output_notes_commitments: Vec<note::StateCommitment>,
     /// Nullifiers for input notes.
@@ -44,9 +51,12 @@ pub struct SettlementProofPublic {
     pub root: Root,
 }
 
+/// *** Truly private inputs ***
 /// The private input for an [`SettlementProof`].
 #[derive(Clone, Debug)]
 pub struct SettlementProofPrivate {
+    /// Inputs represented publicly by their hash
+    pub uncompressed_public: SettlementProofUncompressedPublic,
     /// The output notes being created.
     pub output_notes: Vec<Note>,
     /// The input notes being spent.
@@ -114,14 +124,138 @@ impl<const N_ROWS: usize, const N_COLS: usize, const N_ELEMENTS: usize> MatrixEx
     }
 }
 
+fn pad_to_7(elements: &[Fq]) -> (Fq, Fq, Fq, Fq, Fq, Fq, Fq) {
+    let mut padded = [Fq::zero(); 7];
+    for (i, elem) in elements.iter().take(7).enumerate() {
+        padded[i] = *elem;
+    }
+    (
+        padded[0].clone(),
+        padded[1].clone(),
+        padded[2].clone(),
+        padded[3].clone(),
+        padded[4].clone(),
+        padded[5].clone(),
+        padded[6].clone(),
+    )
+}
+
+// FqVar doesn't implement Zero trait in order to make this function generic
+fn pad_to_7_var(elements: &[FqVar]) -> (FqVar, FqVar, FqVar, FqVar, FqVar, FqVar, FqVar) {
+    let mut padded = vec![FqVar::zero(); 7];
+    for (i, elem) in elements.iter().enumerate().take(7) {
+        padded[i] = elem.clone();
+    }
+    (
+        padded[0].clone(),
+        padded[1].clone(),
+        padded[2].clone(),
+        padded[3].clone(),
+        padded[4].clone(),
+        padded[5].clone(),
+        padded[6].clone(),
+    )
+}
+
+fn calculate_pub_hash(
+    output_notes_commitments: &Vec<note::StateCommitment>,
+    nullifiers: &Vec<Nullifier>,
+    root: &Root,
+) -> Fq {
+    let domain_7 = &Fq::from_le_bytes_mod_order(b"settlement.v1.hash7");
+
+    // Hash all commitments together
+    let commitments_hash = {
+        let output_commitments = pad_to_7(
+                &output_notes_commitments
+                .iter()
+                .map(|c| c.0)
+                .collect::<Vec<_>>()
+        );
+        
+        poseidon377::hash_7(
+            domain_7,
+            output_commitments
+            )       
+    };
+    
+    // Hash all nullifiers together
+    let nullifiers_hash = {
+        let nullifiers = pad_to_7(
+                &nullifiers
+                .iter()
+                .map(|n| n.0)
+                .collect::<Vec<_>>()
+        );
+    
+        poseidon377::hash_7(
+            domain_7,
+            nullifiers
+        )
+    };
+
+    poseidon377::hash_3(
+        &&Fq::from_le_bytes_mod_order(b"settlement.v1.hash3"),
+        (commitments_hash, nullifiers_hash, root.clone()),
+    )
+}
+
+fn calculate_pub_hash_var(
+    cs: ConstraintSystemRef<Fq>,
+    output_note_commitment_vars: &Vec<StateCommitmentVar>,
+    nullifier_vars: &Vec<NullifierVar>,
+    root_var: &RootVar,
+) -> ark_relations::r1cs::Result<FqVar> {
+    // Get domain separator as constant
+    let domain_7 = FqVar::new_input(cs.clone(), || Ok(Fq::from_le_bytes_mod_order(b"settlement.v1.hash7")))?;
+
+    // Process commitments with padding
+    let output_vars: Vec<FqVar> = output_note_commitment_vars
+        .iter()
+        .map(|c| c.inner.clone())
+        .collect();
+    let commitments_tuple = pad_to_7_var(&output_vars);
+
+    // Process nullifiers with padding  
+    let nullifier_vars: Vec<FqVar> = nullifier_vars
+        .iter()
+        .map(|n| n.inner.clone())
+        .collect();
+    let nullifiers_tuple = pad_to_7_var(&nullifier_vars);
+
+    // Compute hashes
+    let commitments_hash = poseidon377::r1cs::hash_7(
+        cs.clone(),
+        &domain_7,
+        commitments_tuple,
+    )?;
+
+    let nullifiers_hash = poseidon377::r1cs::hash_7(
+        cs.clone(),
+        &domain_7,
+        nullifiers_tuple,
+    )?;
+
+    Ok(poseidon377::r1cs::hash_3(
+        cs.clone(),
+        &FqVar::new_input(cs.clone(), || Ok(Fq::from_le_bytes_mod_order(b"settlement.v1.hash3")))?,
+        (commitments_hash, nullifiers_hash, root_var.clone())
+    )?) 
+}
+
 #[cfg(test)]
 fn check_satisfaction(
     public: &SettlementProofPublic,
     private: &SettlementProofPrivate,
 ) -> Result<()> {
+    if public.pub_inputs_hash != calculate_pub_hash(&private.uncompressed_public.output_notes_commitments, &private.uncompressed_public.nullifiers, &private.uncompressed_public.root) {
+        anyhow::bail!("Public inputs hash mismatch");
+    }
+
     // TODO: impl note well-formedness checks
 
-    for (note_commitment, note) in public
+    for (note_commitment, note) in private
+        .uncompressed_public
         .output_notes_commitments
         .iter()
         .zip(private.output_notes.iter())
@@ -135,7 +269,7 @@ fn check_satisfaction(
         }
     }
 
-    for (nullifier, note) in public.nullifiers.iter().zip(private.input_notes.iter()) {
+    for (nullifier, note) in private.uncompressed_public.nullifiers.iter().zip(private.input_notes.iter()) {
         if nullifier != &Nullifier::derive(note) {
             anyhow::bail!("nullifier did not match public input");
         }
@@ -151,7 +285,7 @@ fn check_satisfaction(
         let note_path_valid = auth_path.verify(
             &constants.leaf_crh_params,
             &constants.two_to_one_crh_params,
-            &public.root,
+            &private.uncompressed_public.root,
             [note.commit().0],
         );
         anyhow::ensure!(
@@ -197,7 +331,7 @@ fn check_satisfaction(
         expected_output_notes.push(note.commit());
     }
     anyhow::ensure!(
-        expected_output_notes >= public.output_notes_commitments,
+        expected_output_notes >= private.uncompressed_public.output_notes_commitments,
         "expected output notes do not match claimed"
     );
 
@@ -281,18 +415,21 @@ impl ConstraintSynthesizer<Fq> for SettlementCircuit {
 
         // Public inputs
         let output_note_commitment_vars = self
-            .public
+            .private
+            .uncompressed_public
             .output_notes_commitments
             .iter()
             .map(|commitment| StateCommitmentVar::new_input(cs.clone(), || Ok(*commitment)))
             .collect::<Result<Vec<_>, _>>()?;
         let nullifier_vars = self
-            .public
+            .private
+            .uncompressed_public
             .nullifiers
             .iter()
             .map(|nullifier| NullifierVar::new_input(cs.clone(), || Ok(*nullifier)))
             .collect::<Result<Vec<_>, _>>()?;
-        let root_var = RootVar::new_input(cs.clone(), || Ok(self.public.root))?;
+        let root_var = RootVar::new_input(cs.clone(), || Ok(self.private.uncompressed_public.root))?;
+        let pub_inputs_hash_var = FqVar::new_input(cs.clone(), || Ok(self.public.pub_inputs_hash))?;
 
         // Constants
         let constants = SettlementProofConst::default();
@@ -303,6 +440,10 @@ impl ConstraintSynthesizer<Fq> for SettlementCircuit {
         let zero_var = AmountVar::new_constant(cs.clone(), Amount::zero())?;
 
         // TODO: impl note well-formedness checks
+
+        // Check public input hash matches actual inputs
+        let computed_hash_var = calculate_pub_hash_var(cs, &output_note_commitment_vars, &nullifier_vars, &root_var)?;
+        computed_hash_var.enforce_equal(&pub_inputs_hash_var)?;
 
         // Note commitment integrity check
         for (output_note_commitment_var, output_note_var) in output_note_commitment_vars
@@ -411,12 +552,22 @@ impl DummyWitness for SettlementCircuit {
         // Get auth path from 0th leaf to root
         let auth_path = tree.generate_proof(0).unwrap();
 
+        let pub_inputs_hash = calculate_pub_hash(
+            &vec![note.commit()],
+            &vec![Nullifier::derive(&note)],
+            &tree.root(),
+        );
+
         let public = SettlementProofPublic {
-            output_notes_commitments: vec![note.commit()],
-            nullifiers: vec![Nullifier::derive(&note)],
-            root: tree.root(),
+            pub_inputs_hash
         };
+
         let private = SettlementProofPrivate {
+            uncompressed_public: SettlementProofUncompressedPublic {
+                output_notes_commitments: vec![note.commit()],
+                nullifiers: vec![Nullifier::derive(&note)],
+                root: tree.root(),    
+            },
             output_notes: vec![note.clone()],
             input_notes: vec![note],
             setoff_amount: Amount::zero(),
@@ -461,8 +612,14 @@ impl SettlementProof {
     pub fn verify(
         &self,
         vk: &PreparedVerifyingKey<Bls12_377>,
-        public: SettlementProofPublic,
+        public_inputs_hash: Fq,
+        public: SettlementProofUncompressedPublic,
     ) -> anyhow::Result<()> {
+        // Check that the proof's public input hash matches the hash of inputs
+        if public_inputs_hash != calculate_pub_hash(&public.output_notes_commitments, &public.nullifiers, &public.root) {
+            anyhow::bail!("Public inputs hash mismatch");
+        }
+
         let proof =
             Proof::deserialize_compressed_unchecked(&self.0[..]).map_err(|e| anyhow::anyhow!(e))?;
 
@@ -616,12 +773,20 @@ mod tests {
             let input_auth_path_1 = tree.generate_proof(0).unwrap();
             let input_auth_path_2 = tree.generate_proof(1).unwrap();
 
+            let output_notes_commitments = vec![output_note_commitment_1, output_note_commitment_2];
+            let nullifiers = vec![input_note_nullifier_1, input_note_nullifier_2];
+
+            let pub_inputs_hash = calculate_pub_hash(&output_notes_commitments, &nullifiers, &tree.root());
+
             let public = SettlementProofPublic {
-                output_notes_commitments: vec![output_note_commitment_1, output_note_commitment_2],
-                nullifiers: vec![input_note_nullifier_1, input_note_nullifier_2],
-                root: tree.root(),
+                pub_inputs_hash
             };
             let private = SettlementProofPrivate {
+                uncompressed_public: SettlementProofUncompressedPublic {
+                    output_notes_commitments,
+                    nullifiers,
+                    root: tree.root(),    
+                },
                 output_notes: vec![output_note_1, output_note_2],
                 input_notes: vec![input_note_1, input_note_2],
                 setoff_amount: Amount::from(setoff_amount),
@@ -723,12 +888,21 @@ mod tests {
             let input_auth_path_1 = tree.generate_proof(0).unwrap();
             let input_auth_path_2 = tree.generate_proof(1).unwrap();
 
+            let output_notes_commitments = vec![output_note_commitment_1, incorrect_output_note_commitment_2];
+            let nullifiers = vec![input_note_nullifier_1, input_note_nullifier_2];
+
+            let pub_inputs_hash = calculate_pub_hash(&output_notes_commitments, &nullifiers, &tree.root());
+
             let bad_public = SettlementProofPublic {
-                output_notes_commitments: vec![output_note_commitment_1, incorrect_output_note_commitment_2],
-                nullifiers: vec![input_note_nullifier_1, input_note_nullifier_2],
-                root: tree.root()
+                pub_inputs_hash
             };
+
             let private = SettlementProofPrivate {
+                uncompressed_public: SettlementProofUncompressedPublic {
+                    output_notes_commitments,
+                    nullifiers,
+                    root: tree.root(),    
+                },
                 output_notes: vec![output_note_1, output_note_2],
                 input_notes: vec![input_note_1, input_note_2],
                 setoff_amount: Amount::from(setoff_amount),
