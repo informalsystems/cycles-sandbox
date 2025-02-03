@@ -34,8 +34,8 @@ use penumbra_tct::r1cs::StateCommitmentVar;
 use poseidon377::{RATE_1_PARAMS, RATE_2_PARAMS};
 use poseidon_parameters::v1::Matrix;
 
-use crate::encryption::r1cs::{CiphertextVar, PublicKeyVar};
-use crate::encryption::{ecies_decrypt, ecies_encrypt, Ciphertext};
+use crate::encryption::r1cs::{CiphertextVar, PublicKeyVar, SharedSecretVar};
+use crate::encryption::{ecies_decrypt, ecies_encrypt, r1cs, Ciphertext};
 use crate::note::r1cs::enforce_equal_addresses;
 use crate::note::{r1cs::NoteVar, Note};
 use crate::nullifier::{Nullifier, NullifierVar};
@@ -222,31 +222,36 @@ fn check_satisfaction(
     let solver_ivk = FullViewingKey::from_components(private.solver_ak, private.solver_nk)
         .incoming()
         .clone();
-    let mut shared_secrets = vec![];
-    for (ss_ciphertext, epk) in public.ss_ciphertexts.iter().zip(public.note_epks.iter()) {
-        let s_tee = {
+    for (((ss_ciphertext, epk), output_note), note_ciphertext) in public
+        .ss_ciphertexts
+        .iter()
+        .zip(public.note_epks.iter())
+        .zip(private.output_notes.iter())
+        .zip(public.note_ciphertexts.iter())
+    {
+        // Compute the shared secret `s` by performing key agreement, decompressing, and decrypting.
+        let s = {
+            // Perform key agreement to obtain the shared secret used to encrypt the note's shared secret.
             let ss = solver_ivk.key_agreement_with(epk)?;
-            Encoding(ss.0)
+            let s_tee = Encoding(ss.0)
+                .vartime_decompress()
+                .map_err(|e| anyhow::anyhow!(e))?;
+
+            // Decrypt to recover the note's shared secret.
+            let plaintext_fq_vec = ecies_decrypt(s_tee.clone(), ss_ciphertext.clone())?;
+            let s_fq = plaintext_fq_vec
+                .first()
+                .ok_or_else(|| anyhow::anyhow!("Decryption yielded an empty plaintext vector"))?;
+            Encoding(s_fq.to_bytes())
                 .vartime_decompress()
                 .map_err(|e| anyhow::anyhow!(e))?
         };
-        let s = {
-            let s_plaintext_fq_vec = ecies_decrypt(s_tee.clone(), ss_ciphertext.clone())?;
-            let s_fq = s_plaintext_fq_vec.first().unwrap();
-            let s = Encoding(s_fq.to_bytes()).vartime_decompress().unwrap();
-            s
-        };
-        shared_secrets.push(s);
-    }
-    for ((output_note, shared_secret), expected_ciphertext) in private
-        .output_notes
-        .iter()
-        .zip(shared_secrets.iter())
-        .zip(public.note_ciphertexts.iter())
-    {
-        let output_note = output_note.to_field_elements().unwrap();
-        let ciphertext = ecies_encrypt(shared_secret.clone(), output_note)?;
-        anyhow::ensure!(&ciphertext == expected_ciphertext);
+
+        // Encrypt the output note (after converting it to field elements)
+        // and verify that the ciphertext matches the expected value.
+        let note_field_elements = output_note.to_field_elements().unwrap();
+        let ciphertext = ecies_encrypt(s.clone(), note_field_elements)?;
+        anyhow::ensure!(ciphertext == *note_ciphertext);
     }
 
     Ok(())
