@@ -852,20 +852,36 @@ mod tests {
 
     #[test]
     fn test_key_enc_penumbra() {
+        // 1. debtor performs DHKE with creditor to obtain the debtor-creditor-shared-secret (i.e. `d_c_ss`)
+        let e_sk = Rseed::generate(&mut OsRng).derive_esk();
         let c_addr = address_from_seed(&[2; 32], 2);
         let c_pk = c_addr.transmission_key();
-        let s_addr = test_keys::ADDRESS_0.clone();
-        let d_sk = Rseed::generate(&mut OsRng).derive_esk();
-        let d_c_ss = d_sk.key_agreement_with(c_pk).unwrap();
+        let d_c_ss = e_sk.key_agreement_with(c_pk).unwrap();
         let d_c_ss_enc = Encoding(d_c_ss.0).vartime_decompress().unwrap();
+
+        // 2. debtor encrypts note with `d_c_ss` (not shown here)
+
+        // 3. debtor performs DHKE with solver to obtain the debtor-solver-shared-secret (i.e. `d_s_ss`)
+        let s_addr = test_keys::ADDRESS_0.clone();
         let s_pk = s_addr.transmission_key();
-        let c_s_ss = d_sk.key_agreement_with(s_pk).unwrap();
-        let c_s_ss_enc = Encoding(c_s_ss.0).vartime_decompress().unwrap();
+        let d_s_ss = e_sk.key_agreement_with(s_pk).unwrap();
+        let d_s_ss_enc = Encoding(d_s_ss.0).vartime_decompress().unwrap();
 
+        // 4. debtor encrypts `d_c_ss` to solver (i.e. using `d_s_ss`)
         let d_c_ss_ct =
-            ecies_encrypt(c_s_ss_enc, vec![d_c_ss_enc.vartime_compress_to_field()]).unwrap();
-        let d_c_ss_pt = ecies_decrypt(c_s_ss_enc, d_c_ss_ct).unwrap();
+            ecies_encrypt(d_s_ss_enc, vec![d_c_ss_enc.vartime_compress_to_field()]).unwrap();
 
+        // 5. debtor sends `e_pk` and `d_c_ss_ct` to solver (over the blockchain)
+        let e_pk = e_sk.public();
+
+        // 6. solver performs DHKE using `e_pk` to obtain the debtor-solver-shared-secret (i.e. `s_d_ss`)
+        let s_ivk = test_keys::FULL_VIEWING_KEY.incoming();
+        let s_d_ss = s_ivk.key_agreement_with(&e_pk).unwrap();
+        assert_eq!(s_d_ss, s_d_ss);
+
+        // 7. solver decrypts `d_c_ss_ct` to obtain `d_c_ss`
+        let s_d_ss_enc = Encoding(s_d_ss.0).vartime_decompress().unwrap();
+        let d_c_ss_pt = ecies_decrypt(s_d_ss_enc, d_c_ss_ct).unwrap();
         let d_c_ss_dec = Encoding(d_c_ss_pt[0].to_bytes())
             .vartime_decompress()
             .unwrap();
