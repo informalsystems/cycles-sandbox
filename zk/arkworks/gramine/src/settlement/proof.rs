@@ -213,8 +213,8 @@ fn calculate_pub_hash(
 
 fn calculate_pub_hash_var(
     cs: ConstraintSystemRef<Fq>,
-    output_note_commitment_vars: &Vec<StateCommitmentVar>,
-    nullifier_vars: &Vec<NullifierVar>,
+    output_note_commitment_vars: &[StateCommitmentVar],
+    nullifier_vars: &[NullifierVar],
     root_var: &RootVar,
 ) -> ark_relations::r1cs::Result<FqVar> {
     // Get domain separator as constant
