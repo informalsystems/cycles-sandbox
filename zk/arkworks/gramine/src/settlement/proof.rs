@@ -16,6 +16,7 @@ use arkworks_merkle_tree::poseidontree::{
     RootVar, TwoToOneHashParams,
 };
 use base64::prelude::*;
+use decaf377::r1cs::{ElementVar, FqVar};
 use decaf377::{Bls12_377, Encoding, Fq};
 use decaf377_fmd as fmd;
 use decaf377_ka as ka;
@@ -34,7 +35,7 @@ use penumbra_tct::r1cs::StateCommitmentVar;
 use poseidon377::{RATE_1_PARAMS, RATE_2_PARAMS};
 use poseidon_parameters::v1::Matrix;
 
-use crate::encryption::r1cs::{CiphertextVar, PublicKeyVar, SharedSecretVar};
+use crate::encryption::r1cs::{CiphertextVar, PlaintextVar, PublicKeyVar, SharedSecretVar};
 use crate::encryption::{ecies_decrypt, ecies_encrypt, r1cs, Ciphertext};
 use crate::note::r1cs::enforce_equal_addresses;
 use crate::note::{r1cs::NoteVar, Note};
@@ -298,6 +299,18 @@ impl ConstraintSynthesizer<Fq> for SettlementCircuit {
             .iter()
             .map(|note| NoteVar::new_witness(cs.clone(), || Ok(note.clone())))
             .collect::<Result<Vec<_>, _>>()?;
+        let output_note_ser_vars = self
+            .private
+            .output_notes
+            .iter()
+            .map(|note| {
+                note.to_field_elements()
+                    .unwrap()
+                    .into_iter()
+                    .map(|fq| FqVar::new_witness(cs.clone(), || Ok(fq)).unwrap())
+                    .collect::<Vec<FqVar>>()
+            })
+            .collect::<Vec<Vec<FqVar>>>();
         let input_note_vars = self
             .private
             .input_notes
@@ -445,6 +458,34 @@ impl ConstraintSynthesizer<Fq> for SettlementCircuit {
             .zip(output_note_commitment_vars.iter())
         {
             expected.enforce_equal(claimed)?;
+        }
+
+        // prove output notes were encrypted to same shared secret as input notes (or equivalently `ss_ciphertexts`)
+        for (((ss_ciphertext_var, epk_var), output_note_ser_var), note_ciphertext_var) in
+            ss_ciphertext_vars
+                .iter()
+                .zip(note_epk_vars.iter())
+                .zip(output_note_ser_vars.iter())
+                .zip(note_ciphertext_vars.iter())
+        {
+            // fixme
+            // fn key_agreement(sk: FqVar, pk: ElementVar) -> Result<ElementVar, SynthesisError> {
+            //     let sk_vars = sk.to_bits_le()?;
+            //     pk.scalar_mul_le(sk_vars.to_bits_le()?.iter())
+            // }
+
+            let s_var = {
+                let ss = solver_ivk_var.diversified_public(&epk_var.0)?;
+                let s_tee_var = SharedSecretVar(ss);
+
+                let plaintext_fq_var_vec = r1cs::ecies_decrypt(&s_tee_var, ss_ciphertext_var)?;
+                let s_fq_var = plaintext_fq_var_vec.0.first().unwrap().clone();
+                SharedSecretVar(ElementVar::decompress_from_field(s_fq_var)?)
+            };
+
+            let note_field_elements = PlaintextVar(output_note_ser_var.clone());
+            let expected_note_ciphertext_var = r1cs::ecies_encrypt(&s_var, &note_field_elements)?;
+            expected_note_ciphertext_var.enforce_equal(note_ciphertext_var)?;
         }
 
         Ok(())
