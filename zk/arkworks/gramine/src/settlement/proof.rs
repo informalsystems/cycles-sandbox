@@ -315,6 +315,12 @@ impl ConstraintSynthesizer<Fq> for SettlementCircuit {
             })
             .collect::<Result<Vec<_>, _>>()?;
         let setoff_var = AmountVar::new_witness(cs.clone(), || Ok(self.private.setoff_amount))?;
+        let solver_ivk_var = {
+            let ak_element_var: AuthorizationKeyVar =
+                AuthorizationKeyVar::new_witness(cs.clone(), || Ok(self.private.solver_ak))?;
+            let nk_var = NullifierKeyVar::new_witness(cs.clone(), || Ok(self.private.solver_nk))?;
+            IncomingViewingKeyVar::derive(&nk_var, &ak_element_var)?
+        };
 
         let mut expected_output_note_commitment_vars = vec![];
         for note in self.private.input_notes {
@@ -346,6 +352,24 @@ impl ConstraintSynthesizer<Fq> for SettlementCircuit {
             .map(|nullifier| NullifierVar::new_input(cs.clone(), || Ok(*nullifier)))
             .collect::<Result<Vec<_>, _>>()?;
         let root_var = RootVar::new_input(cs.clone(), || Ok(self.public.root))?;
+        let note_ciphertext_vars = self
+            .public
+            .note_ciphertexts
+            .iter()
+            .map(|ss_ct| CiphertextVar::new_input(cs.clone(), || Ok(ss_ct.clone())))
+            .collect::<Result<Vec<_>, _>>()?;
+        let ss_ciphertext_vars = self
+            .public
+            .ss_ciphertexts
+            .iter()
+            .map(|ss_ct| CiphertextVar::new_input(cs.clone(), || Ok(ss_ct.clone())))
+            .collect::<Result<Vec<_>, _>>()?;
+        let note_epk_vars = self
+            .public
+            .note_epks
+            .iter()
+            .map(|epk| PublicKeyVar::new_input(cs.clone(), || Ok(epk.clone())))
+            .collect::<Result<Vec<_>, _>>()?;
 
         // Constants
         let constants = SettlementProofConst::default();
