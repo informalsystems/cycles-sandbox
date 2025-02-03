@@ -20,9 +20,12 @@ use decaf377::{Bls12_377, Encoding, Fq};
 use decaf377_fmd as fmd;
 use decaf377_ka as ka;
 use decaf377_ka::Public;
+use decaf377_rdsa::{SpendAuth, VerificationKey};
 use penumbra_asset::Value;
-use penumbra_keys::keys::IncomingViewingKey;
-use penumbra_keys::{keys::Diversifier, test_keys, Address};
+use penumbra_keys::keys::{
+    AuthorizationKeyVar, IncomingViewingKeyVar, NullifierKey, NullifierKeyVar,
+};
+use penumbra_keys::{keys::Diversifier, test_keys, Address, FullViewingKey};
 use penumbra_num::{Amount, AmountVar};
 use penumbra_proof_params::{DummyWitness, VerifyingKeyExt, GROTH16_PROOF_LENGTH_BYTES};
 use penumbra_proto::{penumbra::core::component::shielded_pool::v1 as pb, DomainType};
@@ -31,6 +34,7 @@ use penumbra_tct::r1cs::StateCommitmentVar;
 use poseidon377::{RATE_1_PARAMS, RATE_2_PARAMS};
 use poseidon_parameters::v1::Matrix;
 
+use crate::encryption::r1cs::{CiphertextVar, PublicKeyVar};
 use crate::encryption::{ecies_decrypt, ecies_encrypt, Ciphertext};
 use crate::note::r1cs::enforce_equal_addresses;
 use crate::note::{r1cs::NoteVar, Note};
@@ -64,8 +68,10 @@ pub struct SettlementProofPrivate {
     pub input_notes_proofs: Vec<Poseidon377MerklePath>,
     /// Setoff amount for this cycle.
     pub setoff_amount: Amount,
-    /// Solver's viewing key
-    pub solver_ivk: IncomingViewingKey,
+    /// The solver's spend verification key (needed to compute `solver_ivk` in circuit)
+    pub solver_ak: VerificationKey<SpendAuth>,
+    /// The solver's nullifier deriving key (needed to compute `solver_ivk` in circuit)
+    pub solver_nk: NullifierKey,
 }
 
 /// The const input for an [`SettlementProof`].
@@ -213,10 +219,13 @@ fn check_satisfaction(
     );
 
     // prove output notes were encrypted to same shared secret as input notes (or equivalently ss_ciphertexts)
+    let solver_ivk = FullViewingKey::from_components(private.solver_ak, private.solver_nk)
+        .incoming()
+        .clone();
     let mut shared_secrets = vec![];
     for (ss_ciphertext, epk) in public.ss_ciphertexts.iter().zip(public.note_epks.iter()) {
         let s_tee = {
-            let ss = private.solver_ivk.key_agreement_with(epk)?;
+            let ss = solver_ivk.key_agreement_with(epk)?;
             Encoding(ss.0)
                 .vartime_decompress()
                 .map_err(|e| anyhow::anyhow!(e))?
@@ -463,7 +472,8 @@ impl DummyWitness for SettlementCircuit {
             input_notes: vec![note],
             setoff_amount: Amount::zero(),
             input_notes_proofs: vec![auth_path],
-            solver_ivk: test_keys::FULL_VIEWING_KEY.incoming().clone(),
+            solver_ak: test_keys::FULL_VIEWING_KEY.spend_verification_key().clone(),
+            solver_nk: test_keys::FULL_VIEWING_KEY.nullifier_key().clone(),
         };
 
         SettlementCircuit { public, private }
@@ -699,7 +709,8 @@ mod tests {
                 input_notes: vec![d_c_inote, c_d_inote],
                 setoff_amount: Amount::from(setoff_amount),
                 input_notes_proofs: vec![input_auth_path_1, input_auth_path_2],
-                solver_ivk: test_keys::FULL_VIEWING_KEY.incoming().clone(),
+                solver_ak: test_keys::FULL_VIEWING_KEY.spend_verification_key().clone(),
+                solver_nk: test_keys::FULL_VIEWING_KEY.nullifier_key().clone(),
             };
 
             (public, private)
@@ -810,7 +821,8 @@ mod tests {
                 input_notes: vec![d_c_inote, c_d_inote],
                 setoff_amount: Amount::from(setoff_amount),
                 input_notes_proofs: vec![input_auth_path_1, input_auth_path_2],
-                solver_ivk: test_keys::FULL_VIEWING_KEY.incoming().clone(),
+                solver_ak: test_keys::FULL_VIEWING_KEY.spend_verification_key().clone(),
+                solver_nk: test_keys::FULL_VIEWING_KEY.nullifier_key().clone(),
             };
 
             (bad_public, private)
