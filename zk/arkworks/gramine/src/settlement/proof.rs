@@ -578,7 +578,7 @@ mod tests {
     use ark_ff::ToConstraintField;
     use arkworks_merkle_tree::poseidontree::Poseidon377MerkleTree;
     use decaf377::{Encoding, Fq};
-    use decaf377_ka::Secret;
+    use decaf377_ka::{Secret, SharedSecret};
     use penumbra_asset::{asset, Value};
     use penumbra_keys::keys::{Bip44Path, SeedPhrase, SpendKey};
     use penumbra_keys::{test_keys, Address};
@@ -840,42 +840,39 @@ mod tests {
         let ss_13 = s1.key_agreement_with(&p3).unwrap();
         let ss_elm_12 = Encoding(ss_12.0).vartime_decompress().unwrap();
         let ss_elm_13 = Encoding(ss_13.0).vartime_decompress().unwrap();
-        let ss_ciphertext_13 =
-            ecies_encrypt(ss_elm_12, vec![ss_elm_13.vartime_compress_to_field()]).unwrap();
-        let ss_elm_plaintext_13 = ecies_decrypt(ss_elm_12, ss_ciphertext_13).unwrap();
+        let ss_ciphertext_12 =
+            ecies_encrypt(ss_elm_13, vec![ss_elm_12.vartime_compress_to_field()]).unwrap();
+        let ss_elm_plaintext_12 = ecies_decrypt(ss_elm_13, ss_ciphertext_12).unwrap();
 
-        let ss_elm_13_dec = Encoding(ss_elm_plaintext_13[0].to_bytes())
+        let ss_elm_12_dec = Encoding(ss_elm_plaintext_12[0].to_bytes())
             .vartime_decompress()
             .unwrap();
-        assert_eq!(ss_elm_13_dec, ss_elm_13)
+        assert_eq!(ss_elm_12_dec, ss_elm_12)
     }
 
     #[test]
     fn test_key_enc_penumbra() {
-        let dest_debtor = address_from_seed(&[1; 32], 1);
-        let dest_creditor = address_from_seed(&[2; 32], 2);
+        let c_addr = address_from_seed(&[2; 32], 2);
+        let c_pk = c_addr.transmission_key();
+        let s_addr = test_keys::ADDRESS_0.clone();
+        let d_sk = Rseed::generate(&mut OsRng).derive_esk();
+        let d_c_ss = d_sk.key_agreement_with(c_pk).unwrap();
+        let d_c_ss_enc = Encoding(d_c_ss.0).vartime_decompress().unwrap();
+        let s_pk = s_addr.transmission_key();
+        let c_s_ss = d_sk.key_agreement_with(s_pk).unwrap();
+        let c_s_ss_enc = Encoding(c_s_ss.0).vartime_decompress().unwrap();
 
-        let s1 = Rseed::generate(&mut OsRng).derive_esk();
-        let p2 = dest_creditor.transmission_key();
-        let ss_12 = s1.key_agreement_with(p2).unwrap();
-        let ss_elm_12 = Encoding(ss_12.0).vartime_decompress().unwrap();
-        // let ss_as_fq_1 = ss_elm_12.vartime_compress_to_field();
-        // let msg = serde_json::to_string(&output_note_1).unwrap().into_bytes().to_field_elements().unwrap();
-        // let note_ciphertext_1 = ecies_encrypt(ss_as_elm_1, msg).unwrap();
+        let d_c_ss_ct =
+            ecies_encrypt(c_s_ss_enc, vec![d_c_ss_enc.vartime_compress_to_field()]).unwrap();
+        let d_c_ss_pt = ecies_decrypt(c_s_ss_enc, d_c_ss_ct).unwrap();
 
-        // Encrypt shared secret to solver
-        // let p1 = s1.diversified_public(&dest_debtor.diversifier().diversified_generator());
-        let addr_solver = test_keys::ADDRESS_0.clone();
-        let p3 = addr_solver.transmission_key();
-        let ss_13 = s1.key_agreement_with(p3).unwrap();
-        let ss_elm_13 = Encoding(ss_13.0).vartime_decompress().unwrap();
-        let ss_ciphertext_13 =
-            ecies_encrypt(ss_elm_12, vec![ss_elm_13.vartime_compress_to_field()]).unwrap();
-        let ss_elm_plaintext_13 = ecies_decrypt(ss_elm_12, ss_ciphertext_13).unwrap();
-
-        let ss_elm_13_dec = Encoding(ss_elm_plaintext_13[0].to_bytes())
+        let d_c_ss_dec = Encoding(d_c_ss_pt[0].to_bytes())
             .vartime_decompress()
             .unwrap();
-        assert_eq!(ss_elm_13_dec, ss_elm_13)
+        assert_eq!(d_c_ss_dec, d_c_ss_enc);
+        assert_eq!(
+            d_c_ss,
+            SharedSecret::try_from(d_c_ss_pt[0].to_bytes()).unwrap()
+        );
     }
 }
