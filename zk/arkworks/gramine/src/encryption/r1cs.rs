@@ -1,11 +1,11 @@
+use crate::encryption::{Ciphertext, Plaintext, SharedSecret, ENC_DOMAIN_SEP};
 use ark_r1cs_std::prelude::*;
 use ark_relations::r1cs::{Namespace, SynthesisError};
 use ark_std::borrow::Borrow;
 use ark_std::vec::Vec;
 use decaf377::r1cs::{ElementVar, FqVar};
-use decaf377::Fq;
-
-use crate::encryption::{Ciphertext, Plaintext, SharedSecret, ENC_DOMAIN_SEP};
+use decaf377::{Encoding, Fq};
+use decaf377_ka::Public;
 
 #[derive(Clone, Debug)]
 pub struct PlaintextVar(pub Vec<FqVar>);
@@ -67,6 +67,28 @@ impl EqGadget<Fq> for CiphertextVar {
     #[inline]
     fn is_eq(&self, other: &Self) -> Result<Boolean<Fq>, SynthesisError> {
         Ok(self.0.is_eq(&other.0)?)
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct PublicKeyVar(pub ElementVar);
+
+impl AllocVar<Public, Fq> for PublicKeyVar {
+    fn new_variable<T: Borrow<Public>>(
+        cs: impl Into<Namespace<Fq>>,
+        f: impl FnOnce() -> Result<T, SynthesisError>,
+        mode: AllocationMode,
+    ) -> Result<Self, SynthesisError> {
+        let ns = cs.into();
+        let cs = ns.cs();
+        let pk = {
+            let pk = *f()?.borrow();
+            Encoding(pk.0)
+                .vartime_decompress()
+                .map_err(|e| SynthesisError::UnexpectedIdentity)?
+        };
+        let pk_var = ElementVar::new_variable(cs, || Ok(pk), mode)?;
+        Ok(Self(pk_var))
     }
 }
 
