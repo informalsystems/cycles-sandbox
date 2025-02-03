@@ -20,6 +20,7 @@ use decaf377::r1cs::FqVar;
 use decaf377::{Bls12_377, Fq};
 use decaf377_fmd as fmd;
 use decaf377_ka as ka;
+use once_cell::sync::Lazy;
 use penumbra_asset::Value;
 use penumbra_keys::{keys::Diversifier, Address};
 use penumbra_num::{Amount, AmountVar};
@@ -33,6 +34,18 @@ use poseidon_parameters::v1::Matrix;
 use crate::note::r1cs::enforce_equal_addresses;
 use crate::note::{r1cs::NoteVar, Note};
 use crate::nullifier::{Nullifier, NullifierVar};
+
+pub static NULLIFIER_DOMAIN_SEP: Lazy<Fq> = Lazy::new(|| {
+    Fq::from_le_bytes_mod_order(blake2b_simd::blake2b(b"penumbra.nullifier").as_bytes())
+});
+
+pub static COMMITMENTS_DOMAIN_SEP: Lazy<Fq> = Lazy::new(|| {
+    Fq::from_le_bytes_mod_order(blake2b_simd::blake2b(b"penumbra.commitment").as_bytes())
+});
+
+pub static SETTLEMENT_DOMAIN_SEP: Lazy<Fq> = Lazy::new(|| {
+    Fq::from_le_bytes_mod_order(blake2b_simd::blake2b(b"penumbra.settlement").as_bytes())
+});
 
 /// The public input for an [`SettlementProof`].
 #[derive(Clone, Debug)]
@@ -162,8 +175,6 @@ fn calculate_pub_hash(
     nullifiers: &Vec<Nullifier>,
     root: &Root,
 ) -> Fq {
-    let domain_7 = &Fq::from_le_bytes_mod_order(b"settlement.v1.hash7");
-
     // Hash all commitments together
     let commitments_hash = {
         let output_commitments = pad_to_7(
@@ -174,7 +185,7 @@ fn calculate_pub_hash(
         );
         
         poseidon377::hash_7(
-            domain_7,
+            &COMMITMENTS_DOMAIN_SEP,
             output_commitments
             )       
     };
@@ -189,13 +200,13 @@ fn calculate_pub_hash(
         );
     
         poseidon377::hash_7(
-            domain_7,
+            &NULLIFIER_DOMAIN_SEP,
             nullifiers
         )
     };
 
     poseidon377::hash_3(
-        &&Fq::from_le_bytes_mod_order(b"settlement.v1.hash3"),
+        &SETTLEMENT_DOMAIN_SEP,
         (commitments_hash, nullifiers_hash, root.clone()),
     )
 }
@@ -238,7 +249,7 @@ fn calculate_pub_hash_var(
 
     Ok(poseidon377::r1cs::hash_3(
         cs.clone(),
-        &FqVar::new_input(cs.clone(), || Ok(Fq::from_le_bytes_mod_order(b"settlement.v1.hash3")))?,
+        &FqVar::new_input(cs.clone(), || Ok(SETTLEMENT_DOMAIN_SEP.clone()))?,
         (commitments_hash, nullifiers_hash, root_var.clone())
     )?) 
 }
