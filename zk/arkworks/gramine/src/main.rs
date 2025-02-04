@@ -5,8 +5,7 @@ use std::path::{Path, PathBuf};
 use anyhow::Error;
 use ark_groth16::{ProvingKey, VerifyingKey};
 use ark_serialize::CanonicalSerialize;
-use arkworks_gramine::output::OutputCircuit;
-use arkworks_gramine::settlement::SettlementCircuit;
+use arkworks_gramine::{output::OutputCircuit, settlement::SettlementCircuit};
 use decaf377::Bls12_377;
 use penumbra_proof_params::{
     generate_constraint_matrices, DummyWitness, ProvingKeyExt, VerifyingKeyExt,
