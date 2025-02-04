@@ -327,7 +327,7 @@ mod tests {
     }
 
     fn sk_from_seed(seed_phrase_randomness: &[u8]) -> SpendKey {
-        let seed_phrase = SeedPhrase::from_randomness(&seed_phrase_randomness);
+        let seed_phrase = SeedPhrase::from_randomness(seed_phrase_randomness);
         SpendKey::from_seed_phrase_bip44(seed_phrase, &Bip44Path::new(0))
     }
 
@@ -418,7 +418,7 @@ mod tests {
                 note.diversified_generator(),
                 note.transmission_key_s(),
                 note.clue_key(),
-                note.creditor().transmission_key_s().clone()
+                *note.creditor().transmission_key_s()
             );
 
             let bad_public = OutputProofPublic { note_commitment: incorrect_note_commitment, rk };

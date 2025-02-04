@@ -26,7 +26,7 @@ impl AllocVar<Plaintext, Fq> for PlaintextVar {
 impl EqGadget<Fq> for PlaintextVar {
     #[inline]
     fn is_eq(&self, other: &Self) -> Result<Boolean<Fq>, SynthesisError> {
-        Ok(self.0.is_eq(&other.0)?)
+        self.0.is_eq(&other.0)
     }
 }
 
@@ -66,7 +66,7 @@ impl AllocVar<Ciphertext, Fq> for CiphertextVar {
 impl EqGadget<Fq> for CiphertextVar {
     #[inline]
     fn is_eq(&self, other: &Self) -> Result<Boolean<Fq>, SynthesisError> {
-        Ok(self.0.is_eq(&other.0)?)
+        self.0.is_eq(&other.0)
     }
 }
 

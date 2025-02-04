@@ -239,7 +239,7 @@ fn check_satisfaction(
                 .map_err(|e| anyhow::anyhow!(e))?;
 
             // Decrypt to recover the note's shared secret.
-            let plaintext_fq_vec = ecies_decrypt(s_tee.clone(), ss_ciphertext.clone())?;
+            let plaintext_fq_vec = ecies_decrypt(s_tee, ss_ciphertext.clone())?;
             let s_fq = plaintext_fq_vec
                 .first()
                 .ok_or_else(|| anyhow::anyhow!("Decryption yielded an empty plaintext vector"))?;
@@ -251,7 +251,7 @@ fn check_satisfaction(
         // Encrypt the output note (after converting it to field elements)
         // and verify that the ciphertext matches the expected value.
         let note_field_elements = output_note.to_field_elements().unwrap();
-        let ciphertext = ecies_encrypt(s.clone(), note_field_elements)?;
+        let ciphertext = ecies_encrypt(s, note_field_elements)?;
         anyhow::ensure!(ciphertext == *note_ciphertext);
     }
 
@@ -381,7 +381,7 @@ impl ConstraintSynthesizer<Fq> for SettlementCircuit {
             .public
             .note_epks
             .iter()
-            .map(|epk| PublicKeyVar::new_input(cs.clone(), || Ok(epk.clone())))
+            .map(|epk| PublicKeyVar::new_input(cs.clone(), || Ok(*epk)))
             .collect::<Result<Vec<_>, _>>()?;
 
         // Constants
@@ -542,8 +542,8 @@ impl DummyWitness for SettlementCircuit {
             input_notes: vec![note],
             setoff_amount: Amount::zero(),
             input_notes_proofs: vec![auth_path],
-            solver_ak: test_keys::FULL_VIEWING_KEY.spend_verification_key().clone(),
-            solver_nk: test_keys::FULL_VIEWING_KEY.nullifier_key().clone(),
+            solver_ak: *test_keys::FULL_VIEWING_KEY.spend_verification_key(),
+            solver_nk: *test_keys::FULL_VIEWING_KEY.nullifier_key(),
         };
 
         SettlementCircuit { public, private }
@@ -674,7 +674,7 @@ mod tests {
     }
 
     fn address_from_seed(seed_phrase_randomness: &[u8], index: u32) -> Address {
-        let seed_phrase = SeedPhrase::from_randomness(&seed_phrase_randomness);
+        let seed_phrase = SeedPhrase::from_randomness(seed_phrase_randomness);
         let sk_recipient = SpendKey::from_seed_phrase_bip44(seed_phrase, &Bip44Path::new(0));
         let fvk_recipient = sk_recipient.full_viewing_key();
         let ivk_recipient = fvk_recipient.incoming();
@@ -760,7 +760,7 @@ mod tests {
 
             // Encrypt shared secret to solver
             let s_addr = test_keys::ADDRESS_0.clone();
-            let e_pk = e_sk.diversified_public(&s_addr.diversified_generator());
+            let e_pk = e_sk.diversified_public(s_addr.diversified_generator());
             let s_pk = s_addr.transmission_key();
             let d_s_ss = e_sk.key_agreement_with(s_pk).unwrap();
             let d_s_ss_enc = Encoding(d_s_ss.0).vartime_decompress().unwrap();
@@ -779,8 +779,8 @@ mod tests {
                 input_notes: vec![d_c_inote, c_d_inote],
                 setoff_amount: Amount::from(setoff_amount),
                 input_notes_proofs: vec![input_auth_path_1, input_auth_path_2],
-                solver_ak: test_keys::FULL_VIEWING_KEY.spend_verification_key().clone(),
-                solver_nk: test_keys::FULL_VIEWING_KEY.nullifier_key().clone(),
+                solver_ak: *test_keys::FULL_VIEWING_KEY.spend_verification_key(),
+                solver_nk: *test_keys::FULL_VIEWING_KEY.nullifier_key(),
             };
 
             (public, private)
@@ -860,7 +860,7 @@ mod tests {
                 c_d_onote.diversified_generator(),
                 c_d_onote.transmission_key_s(),
                 c_d_onote.clue_key(),
-                c_d_onote.creditor().transmission_key_s().clone()
+                *c_d_onote.creditor().transmission_key_s()
             );
 
             let constants = SettlementProofConst::default();
@@ -891,8 +891,8 @@ mod tests {
                 input_notes: vec![d_c_inote, c_d_inote],
                 setoff_amount: Amount::from(setoff_amount),
                 input_notes_proofs: vec![input_auth_path_1, input_auth_path_2],
-                solver_ak: test_keys::FULL_VIEWING_KEY.spend_verification_key().clone(),
-                solver_nk: test_keys::FULL_VIEWING_KEY.nullifier_key().clone(),
+                solver_ak: *test_keys::FULL_VIEWING_KEY.spend_verification_key(),
+                solver_nk: *test_keys::FULL_VIEWING_KEY.nullifier_key(),
             };
 
             (bad_public, private)
