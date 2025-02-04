@@ -648,7 +648,7 @@ impl TryFrom<pb::ZkOutputProof> for SettlementProof {
 
 #[cfg(test)]
 mod tests {
-    use crate::encryption::{ecies_decrypt, ecies_encrypt};
+    use crate::encryption::{ecies_decrypt, ecies_encrypt, Ciphertext};
     use crate::note::{commitment, Note};
     use crate::nullifier::Nullifier;
     use crate::settlement::proof::{
@@ -658,7 +658,7 @@ mod tests {
     use ark_ff::ToConstraintField;
     use arkworks_merkle_tree::poseidontree::Poseidon377MerkleTree;
     use decaf377::{Encoding, Fq};
-    use decaf377_ka::{Secret, SharedSecret};
+    use decaf377_ka::{Public, Secret, SharedSecret};
     use penumbra_asset::{asset, Value};
     use penumbra_keys::keys::{Bip44Path, SeedPhrase, SpendKey};
     use penumbra_keys::{test_keys, Address};
@@ -680,6 +680,36 @@ mod tests {
         let ivk_recipient = fvk_recipient.incoming();
         let (dest, _dtk_d) = ivk_recipient.payment_address(index.into());
         dest
+    }
+
+    pub fn encrypt_note_and_shared_secret(
+        inote: &Note,
+        onote: &Note,
+        c_addr: &Address,
+        s_addr: &Address,
+    ) -> anyhow::Result<(Ciphertext, Ciphertext, Public)> {
+        // Derive ephemeral secret key.
+        let e_sk = inote.rseed().derive_esk();
+
+        // Encrypt the output note.
+        let c_pk = c_addr.transmission_key();
+        let d_c_ss = e_sk.key_agreement_with(c_pk)?;
+        let d_c_ss_enc = Encoding(d_c_ss.0)
+            .vartime_decompress()
+            .map_err(|e| anyhow::anyhow!(e))?;
+        let onote_ct = ecies_encrypt(d_c_ss_enc, onote.to_field_elements().unwrap())
+            .map_err(|e| anyhow::anyhow!(e))?;
+
+        // Encrypt the shared secret for the solver.
+        let e_pk = e_sk.diversified_public(s_addr.diversified_generator());
+        let s_pk = s_addr.transmission_key();
+        let d_s_ss = e_sk.key_agreement_with(s_pk)?;
+        let d_s_ss_enc = Encoding(d_s_ss.0)
+            .vartime_decompress()
+            .map_err(|e| anyhow::anyhow!(e))?;
+        let d_c_ss_ct = ecies_encrypt(d_s_ss_enc, vec![d_c_ss_enc.vartime_compress_to_field()])?;
+
+        Ok((onote_ct, d_c_ss_ct, e_pk))
     }
 
     prop_compose! {
@@ -751,28 +781,21 @@ mod tests {
             let input_auth_path_1 = tree.generate_proof(0).unwrap();
             let input_auth_path_2 = tree.generate_proof(1).unwrap();
 
-            // Encrypt output notes
-            let e_sk = d_c_inote_rseed.derive_esk();
-            let c_pk = c_addr.transmission_key();
-            let d_c_ss = e_sk.key_agreement_with(c_pk).unwrap();
-            let d_c_ss_enc = Encoding(d_c_ss.0).vartime_decompress().unwrap();
-            let d_c_onote_ct = ecies_encrypt(d_c_ss_enc, d_c_onote.to_field_elements().unwrap()).unwrap();
-
-            // Encrypt shared secret to solver
             let s_addr = test_keys::ADDRESS_0.clone();
-            let e_pk = e_sk.diversified_public(s_addr.diversified_generator());
-            let s_pk = s_addr.transmission_key();
-            let d_s_ss = e_sk.key_agreement_with(s_pk).unwrap();
-            let d_s_ss_enc = Encoding(d_s_ss.0).vartime_decompress().unwrap();
-            let d_c_ss_ct = ecies_encrypt(d_s_ss_enc, vec![d_c_ss_enc.vartime_compress_to_field()]).unwrap();
+            let (d_c_onote_ct, d_c_ss_ct, d_c_e_pk) = encrypt_note_and_shared_secret(
+                &d_c_inote, &d_c_onote, &c_addr, &s_addr
+            ).unwrap();
+            let (c_d_onote_ct, c_d_ss_ct, c_d_e_pk) = encrypt_note_and_shared_secret(
+                &c_d_inote, &c_d_onote, &d_addr, &s_addr
+            ).unwrap();
 
             let public = SettlementProofPublic {
                 output_notes_commitments: vec![d_c_onote_comm, c_d_onote_comm],
                 nullifiers: vec![d_c_inote_nul, c_d_inote_nul],
                 root: tree.root(),
-                note_ciphertexts: vec![d_c_onote_ct],
-                ss_ciphertexts: vec![d_c_ss_ct],
-                note_epks: vec![e_pk],
+                note_ciphertexts: vec![d_c_onote_ct, c_d_onote_ct],
+                ss_ciphertexts: vec![d_c_ss_ct, c_d_ss_ct],
+                note_epks: vec![d_c_e_pk, c_d_e_pk],
             };
             let private = SettlementProofPrivate {
                 output_notes: vec![d_c_onote, c_d_onote],
