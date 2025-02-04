@@ -825,12 +825,13 @@ mod tests {
     }
 
     prop_compose! {
-        // This strategy generates an settlement statement, but then replaces the note commitment
+        // This strategy generates a settlement statement, but then replaces the note commitment
         // with one generated using an invalid note blinding factor.
         fn arb_invalid_settlement_note_commitment_integrity()(
             seed_phrase_randomness_1 in any::<[u8; 32]>(),
             seed_phrase_randomness_2 in any::<[u8; 32]>(),
-            rseed_randomness in any::<[u8; 32]>(),
+            rseed_randomness_1 in any::<[u8; 32]>(),
+            rseed_randomness_2 in any::<[u8; 32]>(),
             amount in 2u64.., asset_id64 in any::<u64>(),
             address_index_1 in any::<u32>(),
             address_index_2 in any::<u32>(),
@@ -838,6 +839,8 @@ mod tests {
         ) -> (SettlementProofPublic, SettlementProofPrivate) {
             let d_addr = address_from_seed(&seed_phrase_randomness_1, address_index_1);
             let c_addr = address_from_seed(&seed_phrase_randomness_2, address_index_2);
+            let d_c_inote_rseed = Rseed(rseed_randomness_1);
+            let c_d_inote_rseed = Rseed(rseed_randomness_2);
 
             let value_to_send = Value {
                 amount: Amount::from(amount),
@@ -847,7 +850,7 @@ mod tests {
                 d_addr.clone(),
                 c_addr.clone(),
                 value_to_send,
-                Rseed(rseed_randomness),
+                d_c_inote_rseed,
             ).expect("should be able to create note");
             let d_c_inote_nul = Nullifier::derive(&d_c_inote);
 
@@ -855,7 +858,7 @@ mod tests {
                 c_addr.clone(),
                 d_addr.clone(),
                 value_to_send,
-                Rseed(rseed_randomness),
+                c_d_inote_rseed,
             ).expect("should be able to create note");
             let c_d_inote_nul = Nullifier::derive(&c_d_inote);
 
@@ -868,14 +871,14 @@ mod tests {
                 d_addr.clone(),
                 c_addr.clone(),
                 value_reduced,
-                Rseed(rseed_randomness),
+                d_c_inote_rseed,
             ).expect("should be able to create note");
             let d_c_onote_comm = d_c_onote.commit();
             let c_d_onote = Note::from_parts(
-                c_addr,
-                d_addr,
+                c_addr.clone(),
+                d_addr.clone(),
                 value_reduced,
-                Rseed(rseed_randomness),
+                c_d_inote_rseed,
             ).expect("should be able to create note");
             let incorrect_c_d_onote_comm = commitment(
                 incorrect_note_blinding,
@@ -885,10 +888,8 @@ mod tests {
                 c_d_onote.clue_key(),
                 *c_d_onote.creditor().transmission_key_s()
             );
-
             let constants = SettlementProofConst::default();
             let leaves: Vec<[Fq; 1]> = vec![[d_c_inote.commit().0], [c_d_inote.commit().0]];
-
             // Build tree with our one dummy note in order to get the merkle root value
             let tree = Poseidon377MerkleTree::new(
                 &constants.leaf_crh_params,
@@ -901,13 +902,21 @@ mod tests {
             let input_auth_path_1 = tree.generate_proof(0).unwrap();
             let input_auth_path_2 = tree.generate_proof(1).unwrap();
 
-            let bad_public = SettlementProofPublic {
+            let s_addr = test_keys::ADDRESS_0.clone();
+            let (d_c_onote_ct, d_c_ss_ct, d_c_e_pk) = encrypt_note_and_shared_secret(
+                &d_c_inote, &d_c_onote, &c_addr, &s_addr
+            ).unwrap();
+            let (c_d_onote_ct, c_d_ss_ct, c_d_e_pk) = encrypt_note_and_shared_secret(
+                &c_d_inote, &c_d_onote, &d_addr, &s_addr
+            ).unwrap();
+
+            let public = SettlementProofPublic {
                 output_notes_commitments: vec![d_c_onote_comm, incorrect_c_d_onote_comm],
                 nullifiers: vec![d_c_inote_nul, c_d_inote_nul],
                 root: tree.root(),
-                note_ciphertexts: vec![],
-                ss_ciphertexts: vec![],
-                note_epks: vec![],
+                note_ciphertexts: vec![d_c_onote_ct, c_d_onote_ct],
+                ss_ciphertexts: vec![d_c_ss_ct, c_d_ss_ct],
+                note_epks: vec![d_c_e_pk, c_d_e_pk],
             };
             let private = SettlementProofPrivate {
                 output_notes: vec![d_c_onote, c_d_onote],
@@ -918,7 +927,7 @@ mod tests {
                 solver_nk: *test_keys::FULL_VIEWING_KEY.nullifier_key(),
             };
 
-            (bad_public, private)
+            (public, private)
         }
     }
 
