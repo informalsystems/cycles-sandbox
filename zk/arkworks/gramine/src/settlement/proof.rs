@@ -5,6 +5,7 @@ use anyhow::Result;
 use ark_crypto_primitives::crh::poseidon::constraints::CRHParametersVar;
 use ark_crypto_primitives::sponge::poseidon::PoseidonConfig;
 use ark_ff::{ToConstraintField, Zero};
+use blake2b_simd::State;
 use std::str::FromStr;
 use ark_groth16::r1cs_to_qap::LibsnarkReduction;
 use ark_groth16::{Groth16, PreparedVerifyingKey, Proof, ProvingKey};
@@ -27,13 +28,12 @@ use penumbra_keys::{keys::Diversifier, Address};
 use penumbra_num::{Amount, AmountVar};
 use penumbra_proof_params::{DummyWitness, VerifyingKeyExt, GROTH16_PROOF_LENGTH_BYTES};
 use penumbra_proto::{penumbra::core::component::shielded_pool::v1 as pb, DomainType};
-use penumbra_shielded_pool::{note, Rseed};
+use penumbra_shielded_pool::{note::StateCommitment, Rseed};
 use penumbra_tct::r1cs::StateCommitmentVar;
 use poseidon377::{RATE_1_PARAMS, RATE_2_PARAMS};
 use poseidon_parameters::v1::Matrix;
 
-use crate::note::r1cs::enforce_equal_addresses;
-use crate::note::{r1cs::NoteVar, Note};
+use crate::note::{r1cs::NoteVar, Note, r1cs::enforce_equal_addresses};
 use crate::nullifier::{Nullifier, NullifierVar};
 
 pub static NULLIFIER_DOMAIN_SEP: Lazy<Fq> = Lazy::new(|| {
@@ -55,15 +55,13 @@ pub const MAX_PROOF_INPUT_ARRAY_SIZE: usize = 7;
 pub struct SettlementProofPublic {
     /// Hash of the input elements in `SettlementProofUncompressedPublic`
     pub pub_inputs_hash: Fq,
-    /// Number of real (unpadded) elements in input arrays of `SettlementProofUncompressedPublic`
-    pub len_inputs: u32,
 }
 
 /// *** Public inputs included along with the private inputs, but represented publicly with their hash ***
 #[derive(Clone, Debug)]
 pub struct SettlementProofUncompressedPublic {
     /// A hiding commitment to output notes.
-    pub output_notes_commitments: [note::StateCommitment; MAX_PROOF_INPUT_ARRAY_SIZE],
+    pub output_notes_commitments: [StateCommitment; MAX_PROOF_INPUT_ARRAY_SIZE],
     /// Nullifiers for input notes.
     pub nullifiers: [Nullifier; MAX_PROOF_INPUT_ARRAY_SIZE],
     // These are the public inputs to the circuit merkle tree verification circuit
@@ -162,9 +160,9 @@ impl FixedSizePadding for FqVar {
     }
 }
 
-impl FixedSizePadding for note::StateCommitment {
-    fn padding_default() -> note::StateCommitment {
-        note::StateCommitment(Fq::zero())
+impl FixedSizePadding for StateCommitment {
+    fn padding_default() -> StateCommitment {
+        StateCommitment(Fq::zero())
     }
     
     fn clone_from_ref(other: &Self) -> Self {
@@ -202,7 +200,6 @@ impl FixedSizePadding for NullifierVar {
     }
 }
 
-
 /// Pads an input slice to an array of len `MAX_PROOF_INPUT_ARRAY_SIZE`. 
 /// Truncates vectors longer than `MAX_PROOF_INPUT_ARRAY_SIZE`
 fn pad_to_fixed_size<F: FixedSizePadding>(elements: &[F]) -> [F; MAX_PROOF_INPUT_ARRAY_SIZE] {
@@ -215,7 +212,7 @@ fn pad_to_fixed_size<F: FixedSizePadding>(elements: &[F]) -> [F; MAX_PROOF_INPUT
 }
 
 fn calculate_pub_hash(
-    output_notes_commitments: &[note::StateCommitment; MAX_PROOF_INPUT_ARRAY_SIZE],
+    output_notes_commitments: &[StateCommitment; MAX_PROOF_INPUT_ARRAY_SIZE],
     nullifiers: &[Nullifier; MAX_PROOF_INPUT_ARRAY_SIZE],
     root: &Root,
 ) -> Fq {
@@ -304,9 +301,13 @@ fn check_satisfaction(
         .uncompressed_public
         .output_notes_commitments
         .iter()
-        .take(public.len_inputs as usize)
-        .zip(private.output_notes.iter().take(public.len_inputs as usize))
+        .zip(private.output_notes.iter())
     {
+        // Break upon first padding element
+        if note_commitment.eq(&StateCommitment::padding_default()) {
+            break;
+        }
+
         if note.diversified_generator() == decaf377::Element::default() {
             anyhow::bail!("diversified generator is identity");
         }
@@ -321,9 +322,13 @@ fn check_satisfaction(
         .uncompressed_public
         .nullifiers
         .iter()
-        .take(public.len_inputs as usize)
-        .zip(private.input_notes.iter().take(public.len_inputs as usize))
+        .zip(private.input_notes.iter())
     {
+        // Break upon first padding element
+        if nullifier.eq(&Nullifier::derive(note)) {
+            break;
+        }
+
         if nullifier != &Nullifier::derive(note) {
             anyhow::bail!("nullifier did not match public input");
         }
@@ -510,25 +515,37 @@ impl ConstraintSynthesizer<Fq> for SettlementCircuit {
         computed_hash_var.enforce_equal(&pub_inputs_hash_var)?;
 
         // Note commitment integrity check
-        // Loop only over non-padding commitments
+        // Keep `active` boolean set to `true` when looping over non-padding elements, set to `false` upon first padding elem
+        let mut active = Boolean::constant(true);
         for (output_note_commitment_var, output_note_var) in output_note_commitment_vars
             .iter()
-            .take(self.public.len_inputs as usize)
-            .zip(output_note_vars.iter().take(self.public.len_inputs as usize))
+            .zip(output_note_vars.iter())
         {
+            // Keep `active` true if commitment var is not padding
+            let is_not_padding = output_note_commitment_var.is_neq(&StateCommitmentVar::padding_default())?;
+            active = Boolean::and(&active, &is_not_padding)?;
+
+            // Only check note commitment integrity when `active`` bool is true (i.e. on non-padding commitments)
             let note_commitment = output_note_var.commit()?;
-            note_commitment.enforce_equal(output_note_commitment_var)?;
+            note_commitment.conditional_enforce_equal(output_note_commitment_var, &active)?;
         }
 
         // Nullifier integrity check
-        // Loop only over non-padding nullifiers
+        // Reset `active` flag
+        // TODO: ensure that the number of padding elements is equal across all input arrays
+        active = Boolean::constant(true);
         for (claimed_nullifier_var, note_var) in nullifier_vars
             .iter()
-            .take(self.public.len_inputs as usize)
-            .zip(input_note_vars.iter().take(self.public.len_inputs as usize))
+            .zip(input_note_vars.iter())
         {
+            // Keep `active` true if commitment var is not padding
+            let is_not_padding = claimed_nullifier_var.is_neq(&NullifierVar::padding_default())?;
+            active = Boolean::and(&active, &is_not_padding)?;
+            
+
+            // Only check note commitment integrity when `active`` bool is true (i.e. on non-padding commitments)
             let nullifier_var = NullifierVar::derive(note_var)?;
-            nullifier_var.enforce_equal(claimed_nullifier_var)?;
+            nullifier_var.conditional_enforce_equal(claimed_nullifier_var, &active)?;
         }
 
         for (input_note_var, input_note_proof_var) in
@@ -632,7 +649,6 @@ impl DummyWitness for SettlementCircuit {
 
         let public = SettlementProofPublic {
             pub_inputs_hash,
-            len_inputs: 1
         };
 
         let private = SettlementProofPrivate {
@@ -853,7 +869,6 @@ mod tests {
 
             let public = SettlementProofPublic {
                 pub_inputs_hash,
-                len_inputs: 2
             };
             let private = SettlementProofPrivate {
                 uncompressed_public: SettlementProofUncompressedPublic {
@@ -969,7 +984,6 @@ mod tests {
 
             let bad_public = SettlementProofPublic {
                 pub_inputs_hash,
-                len_inputs: 2
             };
 
             let private = SettlementProofPrivate {
