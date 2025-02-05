@@ -1,10 +1,11 @@
+use std::char::MAX;
 use std::cmp::Ordering;
-use std::str::FromStr;
 
 use anyhow::Result;
 use ark_crypto_primitives::crh::poseidon::constraints::CRHParametersVar;
 use ark_crypto_primitives::sponge::poseidon::PoseidonConfig;
 use ark_ff::{ToConstraintField, Zero};
+use std::str::FromStr;
 use ark_groth16::r1cs_to_qap::LibsnarkReduction;
 use ark_groth16::{Groth16, PreparedVerifyingKey, Proof, ProvingKey};
 use ark_r1cs_std::prelude::*;
@@ -28,7 +29,7 @@ use penumbra_proof_params::{DummyWitness, VerifyingKeyExt, GROTH16_PROOF_LENGTH_
 use penumbra_proto::{penumbra::core::component::shielded_pool::v1 as pb, DomainType};
 use penumbra_shielded_pool::{note, Rseed};
 use penumbra_tct::r1cs::StateCommitmentVar;
-use poseidon377::{RATE_1_PARAMS, RATE_2_PARAMS, RATE_3_PARAMS, RATE_7_PARAMS};
+use poseidon377::{RATE_1_PARAMS, RATE_2_PARAMS};
 use poseidon_parameters::v1::Matrix;
 
 use crate::note::r1cs::enforce_equal_addresses;
@@ -47,19 +48,24 @@ pub static SETTLEMENT_DOMAIN_SEP: Lazy<Fq> = Lazy::new(|| {
     Fq::from_le_bytes_mod_order(blake2b_simd::blake2b(b"penumbra.settlement").as_bytes())
 });
 
+pub const MAX_PROOF_INPUT_ARRAY_SIZE: usize = 7;
+
 /// The public input for an [`SettlementProof`].
 #[derive(Clone, Debug)]
 pub struct SettlementProofPublic {
-    pub pub_inputs_hash: Fq
+    /// Hash of the input elements in `SettlementProofUncompressedPublic`
+    pub pub_inputs_hash: Fq,
+    /// Number of real (unpadded) elements in input arrays of `SettlementProofUncompressedPublic`
+    pub len_inputs: u32,
 }
 
 /// *** Public inputs included along with the private inputs, but represented publicly with their hash ***
 #[derive(Clone, Debug)]
 pub struct SettlementProofUncompressedPublic {
     /// A hiding commitment to output notes.
-    pub output_notes_commitments: Vec<note::StateCommitment>,
+    pub output_notes_commitments: [note::StateCommitment; MAX_PROOF_INPUT_ARRAY_SIZE],
     /// Nullifiers for input notes.
-    pub nullifiers: Vec<Nullifier>,
+    pub nullifiers: [Nullifier; MAX_PROOF_INPUT_ARRAY_SIZE],
     // These are the public inputs to the circuit merkle tree verification circuit
     pub root: Root,
 }
@@ -137,71 +143,99 @@ impl<const N_ROWS: usize, const N_COLS: usize, const N_ELEMENTS: usize> MatrixEx
     }
 }
 
-fn pad_to_7(elements: &[Fq]) -> (Fq, Fq, Fq, Fq, Fq, Fq, Fq) {
-    let mut padded = [Fq::zero(); 7];
-    for (i, elem) in elements.iter().take(7).enumerate() {
-        padded[i] = *elem;
-    }
-    (
-        padded[0].clone(),
-        padded[1].clone(),
-        padded[2].clone(),
-        padded[3].clone(),
-        padded[4].clone(),
-        padded[5].clone(),
-        padded[6].clone(),
-    )
+
+trait FixedSizePadding {
+    /// Produces a default/empty element for padding
+    fn padding_default() -> Self;
+    
+    /// Creates an instance from a reference, used during padding
+    fn clone_from_ref(other: &Self) -> Self;
 }
 
-// FqVar doesn't implement Zero trait in order to make this function generic
-fn pad_to_7_var(elements: &[FqVar]) -> (FqVar, FqVar, FqVar, FqVar, FqVar, FqVar, FqVar) {
-    let mut padded = vec![FqVar::zero(); 7];
-    for (i, elem) in elements.iter().enumerate().take(7) {
-        padded[i] = elem.clone();
+impl FixedSizePadding for FqVar {
+    fn padding_default() -> FqVar {
+        FqVar::zero()
     }
-    (
-        padded[0].clone(),
-        padded[1].clone(),
-        padded[2].clone(),
-        padded[3].clone(),
-        padded[4].clone(),
-        padded[5].clone(),
-        padded[6].clone(),
-    )
+
+    fn clone_from_ref(other: &Self) -> Self {
+        other.clone()
+    }
+}
+
+impl FixedSizePadding for note::StateCommitment {
+    fn padding_default() -> note::StateCommitment {
+        note::StateCommitment(Fq::zero())
+    }
+    
+    fn clone_from_ref(other: &Self) -> Self {
+        other.clone()
+    }
+}
+
+impl FixedSizePadding for Nullifier {
+    fn padding_default() -> Nullifier {
+        Nullifier(Fq::zero())
+    }
+
+    fn clone_from_ref(other: &Self) -> Self {
+        other.clone()
+    }
+}
+
+impl FixedSizePadding for StateCommitmentVar {
+    fn padding_default() -> Self {
+        StateCommitmentVar { inner: FqVar::zero() }
+    }
+
+    fn clone_from_ref(other: &Self) -> Self {
+        StateCommitmentVar { inner: other.inner.clone() }
+    }
+}
+
+impl FixedSizePadding for NullifierVar {
+    fn padding_default() -> Self {
+        NullifierVar { inner: FqVar::zero() }
+    }
+
+    fn clone_from_ref(other: &Self) -> Self {
+        NullifierVar { inner: other.inner.clone() }
+    }
+}
+
+
+/// Pads an input slice to an array of len `MAX_PROOF_INPUT_ARRAY_SIZE`. 
+/// Truncates vectors longer than `MAX_PROOF_INPUT_ARRAY_SIZE`
+fn pad_to_fixed_size<F: FixedSizePadding>(elements: &[F]) -> [F; MAX_PROOF_INPUT_ARRAY_SIZE] {
+    std::array::from_fn(|i| {
+        elements
+            .get(i)
+            .map(F::clone_from_ref)
+            .unwrap_or_else(F::padding_default)
+    })
 }
 
 fn calculate_pub_hash(
-    output_notes_commitments: &Vec<note::StateCommitment>,
-    nullifiers: &Vec<Nullifier>,
+    output_notes_commitments: &[note::StateCommitment; MAX_PROOF_INPUT_ARRAY_SIZE],
+    nullifiers: &[Nullifier; MAX_PROOF_INPUT_ARRAY_SIZE],
     root: &Root,
 ) -> Fq {
     // Hash all commitments together
     let commitments_hash = {
-        let output_commitments = pad_to_7(
-                &output_notes_commitments
-                .iter()
-                .map(|c| c.0)
-                .collect::<Vec<_>>()
-        );
+        let padded_commitments = pad_to_fixed_size(output_notes_commitments);
         
         poseidon377::hash_7(
             &COMMITMENTS_DOMAIN_SEP,
-            output_commitments
-            )       
+            std::array::from_fn(|i| padded_commitments[i].0).into()
+        )
     };
     
     // Hash all nullifiers together
     let nullifiers_hash = {
-        let nullifiers = pad_to_7(
-                &nullifiers
-                .iter()
-                .map(|n| n.0)
-                .collect::<Vec<_>>()
-        );
+        let padded_nullifiers = pad_to_fixed_size(nullifiers);
     
         poseidon377::hash_7(
             &NULLIFIER_DOMAIN_SEP,
-            nullifiers
+            std::array::from_fn(|i| padded_nullifiers[i].0).into()
         )
     };
 
@@ -213,43 +247,44 @@ fn calculate_pub_hash(
 
 fn calculate_pub_hash_var(
     cs: ConstraintSystemRef<Fq>,
-    output_note_commitment_vars: &[StateCommitmentVar],
-    nullifier_vars: &[NullifierVar],
+    output_note_commitment_vars: &[StateCommitmentVar; MAX_PROOF_INPUT_ARRAY_SIZE],
+    nullifier_vars: &[NullifierVar; MAX_PROOF_INPUT_ARRAY_SIZE],
     root_var: &RootVar,
 ) -> ark_relations::r1cs::Result<FqVar> {
     // Get domain separator as constant
-    let domain_7 = FqVar::new_input(cs.clone(), || Ok(Fq::from_le_bytes_mod_order(b"settlement.v1.hash7")))?;
+    let commitments_var_domain_sep = FqVar::new_input(cs.clone(), || Ok(COMMITMENTS_DOMAIN_SEP.clone()))?;
+    let nullifiers_var_domain_sep = FqVar::new_input(cs.clone(), || Ok(NULLIFIER_DOMAIN_SEP.clone()))?;
+    let settlement_var_domain_sep = FqVar::new_input(cs.clone(), || Ok(SETTLEMENT_DOMAIN_SEP.clone()))?;
 
-    // Process commitments with padding
-    let output_vars: Vec<FqVar> = output_note_commitment_vars
-        .iter()
-        .map(|c| c.inner.clone())
-        .collect();
-    let commitments_tuple = pad_to_7_var(&output_vars);
+    let commitments_hash = {
+        let commitments_fq: [FqVar; MAX_PROOF_INPUT_ARRAY_SIZE] = std::array::from_fn(|i| {
+            output_note_commitment_vars[i].inner.clone()
+        });
 
-    // Process nullifiers with padding  
-    let nullifier_vars: Vec<FqVar> = nullifier_vars
-        .iter()
-        .map(|n| n.inner.clone())
-        .collect();
-    let nullifiers_tuple = pad_to_7_var(&nullifier_vars);
+        // Compute hashes
+        poseidon377::r1cs::hash_7(
+            cs.clone(),
+            &commitments_var_domain_sep,
+            commitments_fq.into()
+        )?
+    };
 
-    // Compute hashes
-    let commitments_hash = poseidon377::r1cs::hash_7(
-        cs.clone(),
-        &domain_7,
-        commitments_tuple,
-    )?;
+    let nullifiers_hash = {
+        let commitments_fq: [FqVar; MAX_PROOF_INPUT_ARRAY_SIZE] = std::array::from_fn(|i| {
+            nullifier_vars[i].inner.clone()
+        });
 
-    let nullifiers_hash = poseidon377::r1cs::hash_7(
-        cs.clone(),
-        &domain_7,
-        nullifiers_tuple,
-    )?;
+        // Compute hashes
+        poseidon377::r1cs::hash_7(
+            cs.clone(),
+            &nullifiers_var_domain_sep,
+            commitments_fq.into()
+        )?
+    };
 
     Ok(poseidon377::r1cs::hash_3(
         cs.clone(),
-        &FqVar::new_input(cs.clone(), || Ok(SETTLEMENT_DOMAIN_SEP.clone()))?,
+        &settlement_var_domain_sep,
         (commitments_hash, nullifiers_hash, root_var.clone())
     )?) 
 }
@@ -264,12 +299,13 @@ fn check_satisfaction(
     }
 
     // TODO: impl note well-formedness checks
-
+    // Loop over only the `public.len_inputs` real inputs
     for (note_commitment, note) in private
         .uncompressed_public
         .output_notes_commitments
         .iter()
-        .zip(private.output_notes.iter())
+        .take(public.len_inputs as usize)
+        .zip(private.output_notes.iter().take(public.len_inputs as usize))
     {
         if note.diversified_generator() == decaf377::Element::default() {
             anyhow::bail!("diversified generator is identity");
@@ -280,7 +316,14 @@ fn check_satisfaction(
         }
     }
 
-    for (nullifier, note) in private.uncompressed_public.nullifiers.iter().zip(private.input_notes.iter()) {
+    // Loop over only the `public.len_inputs` real inputs
+    for (nullifier, note) in private
+        .uncompressed_public
+        .nullifiers
+        .iter()
+        .take(public.len_inputs as usize)
+        .zip(private.input_notes.iter().take(public.len_inputs as usize))
+    {
         if nullifier != &Nullifier::derive(note) {
             anyhow::bail!("nullifier did not match public input");
         }
@@ -288,6 +331,7 @@ fn check_satisfaction(
 
     let constants = SettlementProofConst::default();
 
+    // `input_notes` vector is not padded`
     for (note, auth_path) in private
         .input_notes
         .iter()
@@ -342,7 +386,7 @@ fn check_satisfaction(
         expected_output_notes.push(note.commit());
     }
     anyhow::ensure!(
-        expected_output_notes >= private.uncompressed_public.output_notes_commitments,
+        expected_output_notes == private.uncompressed_public.output_notes_commitments,
         "expected output notes do not match claimed"
     );
 
@@ -425,6 +469,7 @@ impl ConstraintSynthesizer<Fq> for SettlementCircuit {
         }
 
         // Public inputs
+        // TODO: bug! These StateCommitmentVars are being produced differently than the hash does
         let output_note_commitment_vars = self
             .private
             .uncompressed_public
@@ -453,26 +498,43 @@ impl ConstraintSynthesizer<Fq> for SettlementCircuit {
         // TODO: impl note well-formedness checks
 
         // Check public input hash matches actual inputs
-        let computed_hash_var = calculate_pub_hash_var(cs, &output_note_commitment_vars, &nullifier_vars, &root_var)?;
+
+        let padded_commitments= &pad_to_fixed_size(&output_note_commitment_vars);
+        let padded_nullifiers= &pad_to_fixed_size(&nullifier_vars);
+        let computed_hash_var = calculate_pub_hash_var(
+            cs,
+            &padded_commitments,
+            &padded_nullifiers,
+            &root_var
+        )?;
         computed_hash_var.enforce_equal(&pub_inputs_hash_var)?;
 
         // Note commitment integrity check
+        // Loop only over non-padding commitments
         for (output_note_commitment_var, output_note_var) in output_note_commitment_vars
             .iter()
-            .zip(output_note_vars.iter())
+            .take(self.public.len_inputs as usize)
+            .zip(output_note_vars.iter().take(self.public.len_inputs as usize))
         {
             let note_commitment = output_note_var.commit()?;
             note_commitment.enforce_equal(output_note_commitment_var)?;
         }
 
         // Nullifier integrity check
-        for (claimed_nullifier_var, note_var) in nullifier_vars.iter().zip(input_note_vars.iter()) {
+        // Loop only over non-padding nullifiers
+        for (claimed_nullifier_var, note_var) in nullifier_vars
+            .iter()
+            .take(self.public.len_inputs as usize)
+            .zip(input_note_vars.iter().take(self.public.len_inputs as usize))
+        {
             let nullifier_var = NullifierVar::derive(note_var)?;
             nullifier_var.enforce_equal(claimed_nullifier_var)?;
         }
 
         for (input_note_var, input_note_proof_var) in
-            input_note_vars.iter().zip(input_note_proof_vars.iter())
+            input_note_vars
+            .iter()
+            .zip(input_note_proof_vars.iter())
         {
             let is_member = input_note_proof_var.verify_membership(
                 &leaf_crh_params_var,
@@ -563,20 +625,20 @@ impl DummyWitness for SettlementCircuit {
         // Get auth path from 0th leaf to root
         let auth_path = tree.generate_proof(0).unwrap();
 
-        let pub_inputs_hash = calculate_pub_hash(
-            &vec![note.commit()],
-            &vec![Nullifier::derive(&note)],
-            &tree.root(),
-        );
+        let output_notes_commitments = pad_to_fixed_size(&[note.commit()]);
+        let nullifiers = pad_to_fixed_size(&[Nullifier::derive(&note)]);
+
+        let pub_inputs_hash = calculate_pub_hash(&output_notes_commitments, &nullifiers, &tree.root());
 
         let public = SettlementProofPublic {
-            pub_inputs_hash
+            pub_inputs_hash,
+            len_inputs: 1
         };
 
         let private = SettlementProofPrivate {
             uncompressed_public: SettlementProofUncompressedPublic {
-                output_notes_commitments: vec![note.commit()],
-                nullifiers: vec![Nullifier::derive(&note)],
+                output_notes_commitments: [note.commit(); MAX_PROOF_INPUT_ARRAY_SIZE],
+                nullifiers: [Nullifier::derive(&note); MAX_PROOF_INPUT_ARRAY_SIZE],
                 root: tree.root(),    
             },
             output_notes: vec![note.clone()],
@@ -784,13 +846,14 @@ mod tests {
             let input_auth_path_1 = tree.generate_proof(0).unwrap();
             let input_auth_path_2 = tree.generate_proof(1).unwrap();
 
-            let output_notes_commitments = vec![output_note_commitment_1, output_note_commitment_2];
-            let nullifiers = vec![input_note_nullifier_1, input_note_nullifier_2];
+            let output_notes_commitments = pad_to_fixed_size(&[output_note_commitment_1, output_note_commitment_2]);
+            let nullifiers = pad_to_fixed_size(&[input_note_nullifier_1, input_note_nullifier_2]);
 
             let pub_inputs_hash = calculate_pub_hash(&output_notes_commitments, &nullifiers, &tree.root());
 
             let public = SettlementProofPublic {
-                pub_inputs_hash
+                pub_inputs_hash,
+                len_inputs: 2
             };
             let private = SettlementProofPrivate {
                 uncompressed_public: SettlementProofUncompressedPublic {
@@ -899,13 +962,14 @@ mod tests {
             let input_auth_path_1 = tree.generate_proof(0).unwrap();
             let input_auth_path_2 = tree.generate_proof(1).unwrap();
 
-            let output_notes_commitments = vec![output_note_commitment_1, incorrect_output_note_commitment_2];
-            let nullifiers = vec![input_note_nullifier_1, input_note_nullifier_2];
+            let output_notes_commitments = pad_to_fixed_size(&[output_note_commitment_1, incorrect_output_note_commitment_2]);
+            let nullifiers = pad_to_fixed_size(&[input_note_nullifier_1, input_note_nullifier_2]);
 
             let pub_inputs_hash = calculate_pub_hash(&output_notes_commitments, &nullifiers, &tree.root());
 
             let bad_public = SettlementProofPublic {
-                pub_inputs_hash
+                pub_inputs_hash,
+                len_inputs: 2
             };
 
             let private = SettlementProofPrivate {
