@@ -213,8 +213,8 @@ impl FixedSizePadding for Note {
             Address::dummy(&mut rng),
             Address::dummy(&mut rng),
             Value {
-                amount: 10u64.into(),
-                asset_id: penumbra_asset::asset::Id(Fq::from(1u64)),
+                amount: Amount::zero(),
+                asset_id: penumbra_asset::asset::Id(Fq::rand(&mut rng)),
             },
             Rseed::generate(&mut rng),
         )
