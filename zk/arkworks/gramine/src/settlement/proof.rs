@@ -446,7 +446,7 @@ fn check_circuit_satisfaction(
     use ark_relations::r1cs::{self, ConstraintSystem};
 
     let cs = ConstraintSystem::new_ref();
-    let circuit = SettlementCircuit::new(public, private);
+    let circuit = SettlementCircuit::new(public, private)?;
     cs.set_optimization_goal(r1cs::OptimizationGoal::Constraints);
     circuit
         .generate_constraints(cs.clone())
@@ -464,9 +464,13 @@ pub struct SettlementCircuit<const N: usize = MAX_PROOF_INPUT_ARRAY_SIZE> {
     private: SettlementProofPrivate<N>,
 }
 
-impl SettlementCircuit<MAX_PROOF_INPUT_ARRAY_SIZE> {
-    fn new(public: SettlementProofPublic, private: SettlementProofPrivate<MAX_PROOF_INPUT_ARRAY_SIZE>) -> Self {
-        Self { public, private }
+impl<const N: usize> SettlementCircuit<N> {
+    fn new(
+        public: SettlementProofPublic,
+        private: SettlementProofPrivate<N>,
+    ) -> Result<SettlementCircuit, anyhow::Error> {
+        let private = private.padded()?;
+        Ok(SettlementCircuit { public, private })
     }
 }
 
@@ -682,28 +686,25 @@ impl DummyWitness for SettlementCircuit<MAX_PROOF_INPUT_ARRAY_SIZE> {
         // Get auth path from 0th leaf to root
         let auth_path = tree.generate_proof(0).unwrap();
 
-        let output_notes_commitments = pad_to_fixed_size(&[note.commit()]);
-        let nullifiers = pad_to_fixed_size(&[Nullifier::derive(&note)]);
-
-        let pub_inputs_hash = calculate_pub_hash(&output_notes_commitments, &nullifiers, &tree.root());
-
-        let public = SettlementProofPublic {
-            pub_inputs_hash,
+        let uncompressed_public = SettlementProofUncompressedPublic {
+            output_notes_commitments: [note.commit()],
+            nullifiers: [Nullifier::derive(&note)],
+            root: tree.root(),
         };
-
+        let public = uncompressed_public
+            .clone()
+            .padded()
+            .unwrap()
+            .compress_to_public();
         let private = SettlementProofPrivate {
-            uncompressed_public: SettlementProofUncompressedPublic {
-                output_notes_commitments,
-                nullifiers,
-                root: tree.root(),    
-            },
-            output_notes: pad_to_fixed_size(&[note.clone()]),
-            input_notes: pad_to_fixed_size(&[note]),
+            uncompressed_public,
+            output_notes: [note.clone()],
+            input_notes: [note],
             setoff_amount: Amount::zero(),
-            input_notes_proofs: pad_to_fixed_size(&[auth_path]),
+            input_notes_proofs: [auth_path],
         };
 
-        SettlementCircuit { public, private }
+        SettlementCircuit::new(public, private).unwrap()
     }
 }
 
@@ -721,7 +722,7 @@ impl SettlementProof {
         public: SettlementProofPublic,
         private: SettlementProofPrivate<MAX_PROOF_INPUT_ARRAY_SIZE>,
     ) -> anyhow::Result<Self> {
-        let circuit = SettlementCircuit::new(public, private);
+        let circuit = SettlementCircuit::new(public, private)?;
         let proof = Groth16::<Bls12_377, LibsnarkReduction>::create_proof_with_reduction(
             circuit, pk, blinding_r, blinding_s,
         )
@@ -1061,28 +1062,21 @@ mod tests {
             let input_auth_path_1 = tree.generate_proof(0).unwrap();
             let input_auth_path_2 = tree.generate_proof(1).unwrap();
 
-            let output_notes_commitments = pad_to_fixed_size(&[output_note_commitment_1, incorrect_output_note_commitment_2]);
-            let nullifiers = pad_to_fixed_size(&[input_note_nullifier_1, input_note_nullifier_2]);
-
-            let pub_inputs_hash = calculate_pub_hash(&output_notes_commitments, &nullifiers, &tree.root());
-
-            let bad_public = SettlementProofPublic {
-                pub_inputs_hash,
+            let uncompressed_public = SettlementProofUncompressedPublic {
+                output_notes_commitments: [output_note_commitment_1, incorrect_output_note_commitment_2],
+                nullifiers: [input_note_nullifier_1, input_note_nullifier_2],
+                root: tree.root(),
             };
-
+            let bad_public = uncompressed_public.clone().padded().unwrap().compress_to_public();
             let private = SettlementProofPrivate {
-                uncompressed_public: SettlementProofUncompressedPublic {
-                    output_notes_commitments,
-                    nullifiers,
-                    root: tree.root(),    
-                },
-                output_notes: pad_to_fixed_size(&[output_note_1, output_note_2]),
-                input_notes: pad_to_fixed_size(&[input_note_1, input_note_2]),
-                setoff_amount: Amount::from(setoff_amount),
-                input_notes_proofs: pad_to_fixed_size(&[input_auth_path_1, input_auth_path_2])
+                uncompressed_public,
+                output_notes: [output_note_1, output_note_2],
+                input_notes: [input_note_1, input_note_2],
+                    setoff_amount: Amount::from(setoff_amount),
+                input_notes_proofs: [input_auth_path_1, input_auth_path_2],
             };
 
-            (bad_public, private)
+            (bad_public, private.padded().unwrap())
         }
     }
 
