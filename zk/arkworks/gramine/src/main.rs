@@ -15,9 +15,7 @@ use penumbra_proof_setup::single::{
 };
 use rand_core::OsRng;
 
-use arkworks_gramine::{
-    output::OutputCircuit, settlement::SettlementCircuit
-};
+use arkworks_gramine::{output::OutputCircuit, settlement::SettlementCircuit};
 
 fn generate_parameters<D: DummyWitness>() -> (ProvingKey<Bls12_377>, VerifyingKey<Bls12_377>) {
     let matrices = generate_constraint_matrices::<D>();
