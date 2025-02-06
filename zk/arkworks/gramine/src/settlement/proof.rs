@@ -253,24 +253,16 @@ fn calculate_pub_hash(
     root: &Root,
 ) -> Fq {
     // Hash all commitments together
-    let commitments_hash = {
-        let padded_commitments = pad_to_fixed_size(output_notes_commitments);
-
-        poseidon377::hash_7(
-            &COMMITMENTS_DOMAIN_SEP,
-            std::array::from_fn(|i| padded_commitments[i].0).into(),
-        )
-    };
+    let commitments_hash = poseidon377::hash_7(
+        &COMMITMENTS_DOMAIN_SEP,
+        std::array::from_fn(|i| output_notes_commitments[i].0).into(),
+    );
 
     // Hash all nullifiers together
-    let nullifiers_hash = {
-        let padded_nullifiers = pad_to_fixed_size(nullifiers);
-
-        poseidon377::hash_7(
-            &NULLIFIER_DOMAIN_SEP,
-            std::array::from_fn(|i| padded_nullifiers[i].0).into(),
-        )
-    };
+    let nullifiers_hash = poseidon377::hash_7(
+        &NULLIFIER_DOMAIN_SEP,
+        std::array::from_fn(|i| nullifiers[i].0).into(),
+    );
 
     poseidon377::hash_3(
         &SETTLEMENT_DOMAIN_SEP,
