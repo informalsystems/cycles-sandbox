@@ -238,13 +238,20 @@ impl FixedSizePadding for Poseidon377MerklePath {
 
 /// Pads an input slice to an array of len `MAX_PROOF_INPUT_ARRAY_SIZE`.
 /// Truncates vectors longer than `MAX_PROOF_INPUT_ARRAY_SIZE`
-fn pad_to_fixed_size<F: FixedSizePadding>(elements: &[F]) -> [F; MAX_PROOF_INPUT_ARRAY_SIZE] {
-    std::array::from_fn(|i| {
+fn pad_to_fixed_size<F: FixedSizePadding>(
+    elements: &[F],
+) -> anyhow::Result<[F; MAX_PROOF_INPUT_ARRAY_SIZE]> {
+    anyhow::ensure!(
+        elements.len() <= MAX_PROOF_INPUT_ARRAY_SIZE,
+        "input array size is larger than max"
+    );
+
+    Ok(std::array::from_fn(|i| {
         elements
             .get(i)
             .map(F::clone_from_ref)
             .unwrap_or_else(F::padding_default)
-    })
+    }))
 }
 
 fn calculate_pub_hash(
@@ -561,8 +568,10 @@ impl ConstraintSynthesizer<Fq> for SettlementCircuit<MAX_PROOF_INPUT_ARRAY_SIZE>
 
         // Confirm public input hash integrity
         // Need to re-pad the FqVar values. TODO: Try avoiding these function calls
-        let padded_commitments = &pad_to_fixed_size(&output_note_commitment_vars);
-        let padded_nullifiers = &pad_to_fixed_size(&nullifier_vars);
+        let padded_commitments = &pad_to_fixed_size(&output_note_commitment_vars)
+            .map_err(|_| SynthesisError::Unsatisfiable)?;
+        let padded_nullifiers =
+            &pad_to_fixed_size(&nullifier_vars).map_err(|_| SynthesisError::Unsatisfiable)?;
         let computed_hash_var = calculate_pub_hash_var(
             cs.clone(),
             &padded_commitments,
@@ -813,11 +822,9 @@ impl<const N: usize> SettlementProofUncompressedPublic<N> {
     pub fn padded(
         self,
     ) -> anyhow::Result<SettlementProofUncompressedPublic<MAX_PROOF_INPUT_ARRAY_SIZE>> {
-        anyhow::ensure!(N <= MAX_PROOF_INPUT_ARRAY_SIZE, "cycle size exceeds max");
-
         Ok(SettlementProofUncompressedPublic {
-            output_notes_commitments: pad_to_fixed_size(&self.output_notes_commitments),
-            nullifiers: pad_to_fixed_size(&self.nullifiers),
+            output_notes_commitments: pad_to_fixed_size(&self.output_notes_commitments)?,
+            nullifiers: pad_to_fixed_size(&self.nullifiers)?,
             root: self.root,
         })
     }
@@ -834,13 +841,11 @@ impl SettlementProofUncompressedPublic<MAX_PROOF_INPUT_ARRAY_SIZE> {
 // Convenience conversion for the private proof structure.
 impl<const N: usize> SettlementProofPrivate<N> {
     pub fn padded(self) -> anyhow::Result<SettlementProofPrivate<MAX_PROOF_INPUT_ARRAY_SIZE>> {
-        anyhow::ensure!(N <= MAX_PROOF_INPUT_ARRAY_SIZE, "cycle size exceeds max");
-
         Ok(SettlementProofPrivate {
             uncompressed_public: self.uncompressed_public.padded()?,
-            output_notes: pad_to_fixed_size(&self.output_notes),
-            input_notes: pad_to_fixed_size(&self.input_notes),
-            input_notes_proofs: pad_to_fixed_size(&self.input_notes_proofs),
+            output_notes: pad_to_fixed_size(&self.output_notes)?,
+            input_notes: pad_to_fixed_size(&self.input_notes)?,
+            input_notes_proofs: pad_to_fixed_size(&self.input_notes_proofs)?,
             setoff_amount: self.setoff_amount,
         })
     }
@@ -939,27 +944,21 @@ mod tests {
             let input_auth_path_1 = tree.generate_proof(0).unwrap();
             let input_auth_path_2 = tree.generate_proof(1).unwrap();
 
-            let output_notes_commitments = pad_to_fixed_size(&[output_note_commitment_1, output_note_commitment_2]);
-            let nullifiers = pad_to_fixed_size(&[input_note_nullifier_1, input_note_nullifier_2]);
-
-            let pub_inputs_hash = calculate_pub_hash(&output_notes_commitments, &nullifiers, &tree.root());
-
-            let public = SettlementProofPublic {
-                pub_inputs_hash,
+            let uncompressed_public = SettlementProofUncompressedPublic {
+                output_notes_commitments: [output_note_commitment_1, output_note_commitment_2],
+                nullifiers: [input_note_nullifier_1, input_note_nullifier_2],
+                root: tree.root(),
             };
+            let public = uncompressed_public.clone().padded().unwrap().compress_to_public();
             let private = SettlementProofPrivate {
-                uncompressed_public: SettlementProofUncompressedPublic {
-                    output_notes_commitments,
-                    nullifiers,
-                    root: tree.root(),
-                },
-                output_notes: pad_to_fixed_size(&[output_note_1, output_note_2]),
-                input_notes: pad_to_fixed_size(&[input_note_1, input_note_2]),
-                setoff_amount: Amount::from(setoff_amount),
-                input_notes_proofs: pad_to_fixed_size(&[input_auth_path_1, input_auth_path_2])
+                uncompressed_public,
+                output_notes: [output_note_1, output_note_2],
+                input_notes: [input_note_1, input_note_2],
+                    setoff_amount: Amount::from(setoff_amount),
+                input_notes_proofs: [input_auth_path_1, input_auth_path_2],
             };
 
-            (public, private)
+            (public, private.padded().unwrap())
         }
     }
 
