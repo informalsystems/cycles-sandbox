@@ -817,25 +817,39 @@ impl TryFrom<pb::ZkOutputProof> for SettlementProof {
 
 // Convenience conversion for the public inputs structure
 impl<const N: usize> SettlementProofUncompressedPublic<N> {
-    pub fn padded(self) -> SettlementProofUncompressedPublic<MAX_PROOF_INPUT_ARRAY_SIZE> {
-        SettlementProofUncompressedPublic {
+    pub fn padded(
+        self,
+    ) -> anyhow::Result<SettlementProofUncompressedPublic<MAX_PROOF_INPUT_ARRAY_SIZE>> {
+        anyhow::ensure!(N <= MAX_PROOF_INPUT_ARRAY_SIZE, "cycle size exceeds max");
+
+        Ok(SettlementProofUncompressedPublic {
             output_notes_commitments: pad_to_fixed_size(&self.output_notes_commitments),
             nullifiers: pad_to_fixed_size(&self.nullifiers),
             root: self.root,
-        }
+        })
+    }
+}
+
+impl SettlementProofUncompressedPublic<MAX_PROOF_INPUT_ARRAY_SIZE> {
+    pub fn compress_to_public(&self) -> SettlementProofPublic {
+        let pub_inputs_hash =
+            calculate_pub_hash(&self.output_notes_commitments, &self.nullifiers, &self.root);
+        SettlementProofPublic { pub_inputs_hash }
     }
 }
 
 // Convenience conversion for the private proof structure.
 impl<const N: usize> SettlementProofPrivate<N> {
-    pub fn padded(self) -> SettlementProofPrivate<MAX_PROOF_INPUT_ARRAY_SIZE> {
-        SettlementProofPrivate {
-            uncompressed_public: self.uncompressed_public.padded(),
+    pub fn padded(self) -> anyhow::Result<SettlementProofPrivate<MAX_PROOF_INPUT_ARRAY_SIZE>> {
+        anyhow::ensure!(N <= MAX_PROOF_INPUT_ARRAY_SIZE, "cycle size exceeds max");
+
+        Ok(SettlementProofPrivate {
+            uncompressed_public: self.uncompressed_public.padded()?,
             output_notes: pad_to_fixed_size(&self.output_notes),
             input_notes: pad_to_fixed_size(&self.input_notes),
             input_notes_proofs: pad_to_fixed_size(&self.input_notes_proofs),
             setoff_amount: self.setoff_amount,
-        }
+        })
     }
 }
 
