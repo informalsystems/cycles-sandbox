@@ -3,8 +3,10 @@ use std::cmp::Ordering;
 
 use anyhow::Result;
 use ark_crypto_primitives::crh::poseidon::constraints::CRHParametersVar;
+use ark_crypto_primitives::crh::sha256::digest::typenum::UInt;
 use ark_crypto_primitives::sponge::poseidon::PoseidonConfig;
 use ark_ff::{ToConstraintField, Zero};
+use ark_r1cs_std::fields::fp::FpVar;
 use blake2b_simd::State;
 use std::str::FromStr;
 use ark_groth16::r1cs_to_qap::LibsnarkReduction;
@@ -249,9 +251,9 @@ fn calculate_pub_hash_var(
     root_var: &RootVar,
 ) -> ark_relations::r1cs::Result<FqVar> {
     // Get domain separator as constant
-    let commitments_var_domain_sep = FqVar::new_input(cs.clone(), || Ok(COMMITMENTS_DOMAIN_SEP.clone()))?;
-    let nullifiers_var_domain_sep = FqVar::new_input(cs.clone(), || Ok(NULLIFIER_DOMAIN_SEP.clone()))?;
-    let settlement_var_domain_sep = FqVar::new_input(cs.clone(), || Ok(SETTLEMENT_DOMAIN_SEP.clone()))?;
+    let commitments_var_domain_sep = FqVar::new_constant(cs.clone(), &*COMMITMENTS_DOMAIN_SEP)?;
+    let nullifiers_var_domain_sep = FqVar::new_constant(cs.clone(), &*NULLIFIER_DOMAIN_SEP)?;
+    let settlement_var_domain_sep = FqVar::new_constant(cs.clone(), &*SETTLEMENT_DOMAIN_SEP)?;
 
     let commitments_hash = {
         let commitments_fq: [FqVar; MAX_PROOF_INPUT_ARRAY_SIZE] = std::array::from_fn(|i| {
@@ -432,23 +434,42 @@ impl SettlementCircuit {
 
 impl ConstraintSynthesizer<Fq> for SettlementCircuit {
     fn generate_constraints(self, cs: ConstraintSystemRef<Fq>) -> ark_relations::r1cs::Result<()> {
-        // Witnesses
+        // Calculate the total number of non-padded elements in private and public input arrays
+        // by finding the index of the first padded element
+        let real_inputs_count = if let Some(index) = self
+            .private
+            .uncompressed_public
+            .output_notes_commitments
+            .iter()
+            .position(|c| *c == StateCommitment::padding_default())
+        {
+            // Convert zero-indexed position to total number
+            index + 1
+        } else {
+            // If no padding elems exist, total number is array size
+            MAX_PROOF_INPUT_ARRAY_SIZE
+        };
+
+        // Witnesses (only non-padding elements)
         let output_note_vars = self
             .private
             .output_notes
             .iter()
+            .take(real_inputs_count)
             .map(|note| NoteVar::new_witness(cs.clone(), || Ok(note.clone())))
             .collect::<Result<Vec<_>, _>>()?;
         let input_note_vars = self
             .private
             .input_notes
             .iter()
+            .take(real_inputs_count)
             .map(|note| NoteVar::new_witness(cs.clone(), || Ok(note.clone())))
             .collect::<Result<Vec<_>, _>>()?;
         let input_note_proof_vars = self
             .private
             .input_notes_proofs
             .iter()
+            .take(real_inputs_count)
             .map(|auth_path| {
                 Poseidon377MerklePathVar::new_witness(ark_relations::ns!(cs, "path_var"), || {
                     Ok(auth_path)
@@ -458,7 +479,7 @@ impl ConstraintSynthesizer<Fq> for SettlementCircuit {
         let setoff_var = AmountVar::new_witness(cs.clone(), || Ok(self.private.setoff_amount))?;
 
         let mut expected_output_note_commitment_vars = vec![];
-        for note in self.private.input_notes {
+        for note in self.private.input_notes.iter().take(real_inputs_count) {
             let note_var = {
                 let remainder = note.amount() - self.private.setoff_amount;
                 let new_value = Value {
@@ -473,13 +494,13 @@ impl ConstraintSynthesizer<Fq> for SettlementCircuit {
             expected_output_note_commitment_vars.push(note_var.commit()?);
         }
 
-        // Public inputs
-        // TODO: bug! These StateCommitmentVars are being produced differently than the hash does
+        // Public inputs (only non-padding elements)
         let output_note_commitment_vars = self
             .private
             .uncompressed_public
             .output_notes_commitments
             .iter()
+            .take(real_inputs_count)
             .map(|commitment| StateCommitmentVar::new_input(cs.clone(), || Ok(*commitment)))
             .collect::<Result<Vec<_>, _>>()?;
         let nullifier_vars = self
@@ -487,6 +508,7 @@ impl ConstraintSynthesizer<Fq> for SettlementCircuit {
             .uncompressed_public
             .nullifiers
             .iter()
+            .take(real_inputs_count)
             .map(|nullifier| NullifierVar::new_input(cs.clone(), || Ok(*nullifier)))
             .collect::<Result<Vec<_>, _>>()?;
         let root_var = RootVar::new_input(cs.clone(), || Ok(self.private.uncompressed_public.root))?;
@@ -502,12 +524,12 @@ impl ConstraintSynthesizer<Fq> for SettlementCircuit {
 
         // TODO: impl note well-formedness checks
 
-        // Check public input hash matches actual inputs
-
+        // Confirm public input hash integrity
+        // Need to re-pad the FqVar values. TODO: Try avoiding these function calls
         let padded_commitments= &pad_to_fixed_size(&output_note_commitment_vars);
         let padded_nullifiers= &pad_to_fixed_size(&nullifier_vars);
         let computed_hash_var = calculate_pub_hash_var(
-            cs,
+            cs.clone(),
             &padded_commitments,
             &padded_nullifiers,
             &root_var
@@ -515,37 +537,21 @@ impl ConstraintSynthesizer<Fq> for SettlementCircuit {
         computed_hash_var.enforce_equal(&pub_inputs_hash_var)?;
 
         // Note commitment integrity check
-        // Keep `active` boolean set to `true` when looping over non-padding elements, set to `false` upon first padding elem
-        let mut active = Boolean::constant(true);
         for (output_note_commitment_var, output_note_var) in output_note_commitment_vars
             .iter()
             .zip(output_note_vars.iter())
-        {
-            // Keep `active` true if commitment var is not padding
-            let is_not_padding = output_note_commitment_var.is_neq(&StateCommitmentVar::padding_default())?;
-            active = Boolean::and(&active, &is_not_padding)?;
-
-            // Only check note commitment integrity when `active`` bool is true (i.e. on non-padding commitments)
+        {            
             let note_commitment = output_note_var.commit()?;
-            note_commitment.conditional_enforce_equal(output_note_commitment_var, &active)?;
+            note_commitment.enforce_equal(output_note_commitment_var)?;
         }
 
         // Nullifier integrity check
-        // Reset `active` flag
-        // TODO: ensure that the number of padding elements is equal across all input arrays
-        active = Boolean::constant(true);
         for (claimed_nullifier_var, note_var) in nullifier_vars
             .iter()
             .zip(input_note_vars.iter())
-        {
-            // Keep `active` true if commitment var is not padding
-            let is_not_padding = claimed_nullifier_var.is_neq(&NullifierVar::padding_default())?;
-            active = Boolean::and(&active, &is_not_padding)?;
-            
-
-            // Only check note commitment integrity when `active`` bool is true (i.e. on non-padding commitments)
+        {            
             let nullifier_var = NullifierVar::derive(note_var)?;
-            nullifier_var.conditional_enforce_equal(claimed_nullifier_var, &active)?;
+            nullifier_var.enforce_equal(claimed_nullifier_var)?;
         }
 
         for (input_note_var, input_note_proof_var) in
