@@ -61,11 +61,11 @@ pub struct SettlementProofPublic {
 
 /// *** Public inputs included along with the private inputs, but represented publicly with their hash ***
 #[derive(Clone, Debug)]
-pub struct SettlementProofUncompressedPublic {
+pub struct SettlementProofUncompressedPublic<const N: usize> {
     /// A hiding commitment to output notes.
-    pub output_notes_commitments: [StateCommitment; MAX_PROOF_INPUT_ARRAY_SIZE],
+    pub output_notes_commitments: [StateCommitment; N],
     /// Nullifiers for input notes.
-    pub nullifiers: [Nullifier; MAX_PROOF_INPUT_ARRAY_SIZE],
+    pub nullifiers: [Nullifier; N],
     // These are the public inputs to the circuit merkle tree verification circuit
     pub root: Root,
 }
@@ -73,15 +73,15 @@ pub struct SettlementProofUncompressedPublic {
 /// *** Truly private inputs ***
 /// The private input for an [`SettlementProof`].
 #[derive(Clone, Debug)]
-pub struct SettlementProofPrivate {
+pub struct SettlementProofPrivate<const N: usize> {
     /// Inputs represented publicly by their hash
-    pub uncompressed_public: SettlementProofUncompressedPublic,
-    /// The output notes being created.
-    pub output_notes: Vec<Note>,
-    /// The input notes being spent.
-    pub input_notes: Vec<Note>,
-    /// Membership proof for all input notes.
-    pub input_notes_proofs: Vec<Poseidon377MerklePath>,
+    pub uncompressed_public: SettlementProofUncompressedPublic<N>,
+    /// The output notes being created; missing entries are None
+    pub output_notes: [Note; N],
+    /// The input notes being spent; missing entries are None
+    pub input_notes: [Note; N],
+    /// Membership proofs for all input notes; missing entries are None
+    pub input_notes_proofs: [Poseidon377MerklePath; N],
     /// Setoff amount for this cycle.
     pub setoff_amount: Amount,
 }
@@ -202,6 +202,37 @@ impl FixedSizePadding for NullifierVar {
     }
 }
 
+impl FixedSizePadding for Note {    
+    fn padding_default() -> Self {
+        let mut rng = rand::thread_rng();
+
+        // TODO: Consider moving to Option type
+        Note::from_parts(
+            Address::dummy(&mut rng),
+            Address::dummy(&mut rng),
+            Value {
+                amount: 10u64.into(),
+                asset_id: penumbra_asset::asset::Id(Fq::from(1u64)),
+            },
+            Rseed::generate(&mut rng),
+        ).unwrap()
+    }
+
+    fn clone_from_ref(other: &Self) -> Self {
+        other.clone()
+    }
+}
+
+impl FixedSizePadding for Poseidon377MerklePath {
+    fn padding_default() -> Self {
+        Poseidon377MerklePath::default()
+    }
+
+    fn clone_from_ref(other: &Self) -> Self {
+        other.clone()
+    }
+}
+
 /// Pads an input slice to an array of len `MAX_PROOF_INPUT_ARRAY_SIZE`. 
 /// Truncates vectors longer than `MAX_PROOF_INPUT_ARRAY_SIZE`
 fn pad_to_fixed_size<F: FixedSizePadding>(elements: &[F]) -> [F; MAX_PROOF_INPUT_ARRAY_SIZE] {
@@ -291,7 +322,7 @@ fn calculate_pub_hash_var(
 #[cfg(test)]
 fn check_satisfaction(
     public: &SettlementProofPublic,
-    private: &SettlementProofPrivate,
+    private: &SettlementProofPrivate<MAX_PROOF_INPUT_ARRAY_SIZE>,
 ) -> Result<()> {
     if public.pub_inputs_hash != calculate_pub_hash(&private.uncompressed_public.output_notes_commitments, &private.uncompressed_public.nullifiers, &private.uncompressed_public.root) {
         anyhow::bail!("Public inputs hash mismatch");
@@ -403,12 +434,12 @@ fn check_satisfaction(
 #[cfg(test)]
 fn check_circuit_satisfaction(
     public: SettlementProofPublic,
-    private: SettlementProofPrivate,
+    private: SettlementProofPrivate<MAX_PROOF_INPUT_ARRAY_SIZE>,
 ) -> Result<()> {
     use ark_relations::r1cs::{self, ConstraintSystem};
 
     let cs = ConstraintSystem::new_ref();
-    let circuit = SettlementCircuit { public, private };
+    let circuit = SettlementCircuit::new(public, private);
     cs.set_optimization_goal(r1cs::OptimizationGoal::Constraints);
     circuit
         .generate_constraints(cs.clone())
@@ -421,18 +452,18 @@ fn check_circuit_satisfaction(
 }
 
 #[derive(Clone, Debug)]
-pub struct SettlementCircuit {
+pub struct SettlementCircuit<const N: usize = MAX_PROOF_INPUT_ARRAY_SIZE> {
     public: SettlementProofPublic,
-    private: SettlementProofPrivate,
+    private: SettlementProofPrivate<N>,
 }
 
-impl SettlementCircuit {
-    fn new(public: SettlementProofPublic, private: SettlementProofPrivate) -> Self {
+impl SettlementCircuit<MAX_PROOF_INPUT_ARRAY_SIZE> {
+    fn new(public: SettlementProofPublic, private: SettlementProofPrivate<MAX_PROOF_INPUT_ARRAY_SIZE>) -> Self {
         Self { public, private }
     }
 }
 
-impl ConstraintSynthesizer<Fq> for SettlementCircuit {
+impl ConstraintSynthesizer<Fq> for SettlementCircuit<MAX_PROOF_INPUT_ARRAY_SIZE> {
     fn generate_constraints(self, cs: ConstraintSystemRef<Fq>) -> ark_relations::r1cs::Result<()> {
         // Calculate the total number of non-padded elements in private and public input arrays
         // by finding the index of the first padded element
@@ -611,7 +642,7 @@ impl ConstraintSynthesizer<Fq> for SettlementCircuit {
     }
 }
 
-impl DummyWitness for SettlementCircuit {
+impl DummyWitness for SettlementCircuit<MAX_PROOF_INPUT_ARRAY_SIZE> {
     fn with_dummy_witness() -> Self {
         let diversifier_bytes = [1u8; 16];
         let pk_d_bytes = decaf377::Element::GENERATOR.vartime_compress().0;
@@ -659,14 +690,14 @@ impl DummyWitness for SettlementCircuit {
 
         let private = SettlementProofPrivate {
             uncompressed_public: SettlementProofUncompressedPublic {
-                output_notes_commitments: [note.commit(); MAX_PROOF_INPUT_ARRAY_SIZE],
-                nullifiers: [Nullifier::derive(&note); MAX_PROOF_INPUT_ARRAY_SIZE],
+                output_notes_commitments,
+                nullifiers,
                 root: tree.root(),    
             },
-            output_notes: vec![note.clone()],
-            input_notes: vec![note],
+            output_notes: pad_to_fixed_size(&[note.clone()]),
+            input_notes: pad_to_fixed_size(&[note]),
             setoff_amount: Amount::zero(),
-            input_notes_proofs: vec![auth_path],
+            input_notes_proofs: pad_to_fixed_size(&[auth_path]),
         };
 
         SettlementCircuit { public, private }
@@ -685,7 +716,7 @@ impl SettlementProof {
         blinding_s: Fq,
         pk: &ProvingKey<Bls12_377>,
         public: SettlementProofPublic,
-        private: SettlementProofPrivate,
+        private: SettlementProofPrivate<MAX_PROOF_INPUT_ARRAY_SIZE>,
     ) -> anyhow::Result<Self> {
         let circuit = SettlementCircuit::new(public, private);
         let proof = Groth16::<Bls12_377, LibsnarkReduction>::create_proof_with_reduction(
@@ -708,7 +739,7 @@ impl SettlementProof {
         &self,
         vk: &PreparedVerifyingKey<Bls12_377>,
         public_inputs_hash: Fq,
-        public: SettlementProofUncompressedPublic,
+        public: SettlementProofUncompressedPublic<MAX_PROOF_INPUT_ARRAY_SIZE>,
     ) -> anyhow::Result<()> {
         // Check that the proof's public input hash matches the hash of inputs
         if public_inputs_hash != calculate_pub_hash(&public.output_notes_commitments, &public.nullifiers, &public.root) {
@@ -775,6 +806,30 @@ impl TryFrom<pb::ZkOutputProof> for SettlementProof {
     }
 }
 
+// Convenience conversion for the public inputs structure
+impl<const N: usize> SettlementProofUncompressedPublic<N> {
+    pub fn padded(self) -> SettlementProofUncompressedPublic<MAX_PROOF_INPUT_ARRAY_SIZE> {
+        SettlementProofUncompressedPublic {
+            output_notes_commitments: pad_to_fixed_size(&self.output_notes_commitments),
+            nullifiers: pad_to_fixed_size(&self.nullifiers),
+            root: self.root,
+        }
+    }
+}
+
+// Convenience conversion for the private proof structure.
+impl<const N: usize> SettlementProofPrivate<N> {
+    pub fn padded(self) -> SettlementProofPrivate<MAX_PROOF_INPUT_ARRAY_SIZE> {
+        SettlementProofPrivate {
+            uncompressed_public: self.uncompressed_public.padded(),
+            output_notes: pad_to_fixed_size(&self.output_notes),
+            input_notes: pad_to_fixed_size(&self.input_notes),
+            input_notes_proofs: pad_to_fixed_size(&self.input_notes_proofs),
+            setoff_amount: self.setoff_amount,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -810,7 +865,7 @@ mod tests {
             amount in 2u64.., asset_id64 in any::<u64>(),
             address_index_1 in any::<u32>(),
             address_index_2 in any::<u32>()
-        ) -> (SettlementProofPublic, SettlementProofPrivate) {
+        ) -> (SettlementProofPublic, SettlementProofPrivate<MAX_PROOF_INPUT_ARRAY_SIZE>) {
             let dest_debtor = address_from_seed(&seed_phrase_randomness_1, address_index_1);
             let dest_creditor = address_from_seed(&seed_phrase_randomness_2, address_index_2);
 
@@ -882,10 +937,10 @@ mod tests {
                     nullifiers,
                     root: tree.root(),    
                 },
-                output_notes: vec![output_note_1, output_note_2],
-                input_notes: vec![input_note_1, input_note_2],
+                output_notes: pad_to_fixed_size(&[output_note_1, output_note_2]),
+                input_notes: pad_to_fixed_size(&[input_note_1, input_note_2]),
                 setoff_amount: Amount::from(setoff_amount),
-                input_notes_proofs: vec![input_auth_path_1, input_auth_path_2]
+                input_notes_proofs: pad_to_fixed_size(&[input_auth_path_1, input_auth_path_2])
             };
 
             (public, private)
@@ -917,7 +972,7 @@ mod tests {
             address_index_1 in any::<u32>(),
             address_index_2 in any::<u32>(),
             incorrect_note_blinding in fq_strategy()
-        ) -> (SettlementProofPublic, SettlementProofPrivate) {
+        ) -> (SettlementProofPublic, SettlementProofPrivate<MAX_PROOF_INPUT_ARRAY_SIZE>) {
             let dest_debtor = address_from_seed(&seed_phrase_randomness_1, address_index_1);
             let dest_creditor = address_from_seed(&seed_phrase_randomness_2, address_index_2);
 
@@ -998,10 +1053,10 @@ mod tests {
                     nullifiers,
                     root: tree.root(),    
                 },
-                output_notes: vec![output_note_1, output_note_2],
-                input_notes: vec![input_note_1, input_note_2],
+                output_notes: pad_to_fixed_size(&[output_note_1, output_note_2]),
+                input_notes: pad_to_fixed_size(&[input_note_1, input_note_2]),
                 setoff_amount: Amount::from(setoff_amount),
-                input_notes_proofs: vec![input_auth_path_1, input_auth_path_2]
+                input_notes_proofs: pad_to_fixed_size(&[input_auth_path_1, input_auth_path_2])
             };
 
             (bad_public, private)

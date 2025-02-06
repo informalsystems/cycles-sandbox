@@ -38,6 +38,7 @@ poseidon-parameters              = { git = "https://github.com/dangush/poseidon3
 rand_core                        = { version = "0.6.4", default-features = false }
 serde                            = { version = "1.0.216", features = ["derive"], default-features = false }
 tracing                          = { version = "0.1.41", default-features = false }
+rand                             = { version = "0.8.5" } # TODO: REMOVE!
 
 [dev-dependencies]
 proptest                         = { version = "1" }
