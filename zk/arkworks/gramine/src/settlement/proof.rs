@@ -178,7 +178,7 @@ impl FixedSizePadding for StateCommitment {
     }
 
     fn clone_from_ref(other: &Self) -> Self {
-        other.clone()
+        *other
     }
 }
 
@@ -188,7 +188,7 @@ impl FixedSizePadding for Nullifier {
     }
 
     fn clone_from_ref(other: &Self) -> Self {
-        other.clone()
+        *other
     }
 }
 
@@ -275,7 +275,7 @@ impl FixedSizePadding for Public {
     }
 
     fn clone_from_ref(other: &Self) -> Self {
-        other.clone()
+        *other
     }
 }
 
@@ -316,7 +316,7 @@ fn calculate_pub_hash(
 
     poseidon377::hash_3(
         &SETTLEMENT_DOMAIN_SEP,
-        (commitments_hash, nullifiers_hash, root.clone()),
+        (commitments_hash, nullifiers_hash, *root),
     )
 }
 
@@ -327,9 +327,9 @@ fn calculate_pub_hash_var(
     root_var: &RootVar,
 ) -> ark_relations::r1cs::Result<FqVar> {
     // Get domain separator as constant
-    let commitments_var_domain_sep = FqVar::new_constant(cs.clone(), &*COMMITMENTS_DOMAIN_SEP)?;
-    let nullifiers_var_domain_sep = FqVar::new_constant(cs.clone(), &*NULLIFIER_DOMAIN_SEP)?;
-    let settlement_var_domain_sep = FqVar::new_constant(cs.clone(), &*SETTLEMENT_DOMAIN_SEP)?;
+    let commitments_var_domain_sep = FqVar::new_constant(cs.clone(), *COMMITMENTS_DOMAIN_SEP)?;
+    let nullifiers_var_domain_sep = FqVar::new_constant(cs.clone(), *NULLIFIER_DOMAIN_SEP)?;
+    let settlement_var_domain_sep = FqVar::new_constant(cs.clone(), *SETTLEMENT_DOMAIN_SEP)?;
 
     let commitments_hash = {
         let commitments_fq: [FqVar; MAX_PROOF_INPUT_ARRAY_SIZE] =
@@ -355,11 +355,11 @@ fn calculate_pub_hash_var(
         )?
     };
 
-    Ok(poseidon377::r1cs::hash_3(
+    poseidon377::r1cs::hash_3(
         cs.clone(),
         &settlement_var_domain_sep,
         (commitments_hash, nullifiers_hash, root_var.clone()),
-    )?)
+    )
 }
 
 #[cfg(test)]
