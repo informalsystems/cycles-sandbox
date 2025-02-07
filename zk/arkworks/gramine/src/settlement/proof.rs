@@ -17,16 +17,15 @@ use arkworks_merkle_tree::poseidontree::{
 use base64::prelude::*;
 use decaf377::r1cs::{ElementVar, FqVar};
 use decaf377::{Bls12_377, Encoding, Fq};
-use decaf377_fmd as fmd;
-use decaf377_ka as ka;
 use decaf377_ka::Public;
 use decaf377_rdsa::{SpendAuth, VerificationKey};
 use once_cell::sync::Lazy;
 use penumbra_asset::Value;
 use penumbra_keys::keys::{
-    AuthorizationKeyVar, IncomingViewingKeyVar, NullifierKey, NullifierKeyVar,
+    AuthorizationKeyVar, Bip44Path, IncomingViewingKeyVar, NullifierKey, NullifierKeyVar,
+    SeedPhrase, SpendKey,
 };
-use penumbra_keys::{keys::Diversifier, test_keys, Address, FullViewingKey};
+use penumbra_keys::{test_keys, Address};
 use penumbra_num::{Amount, AmountVar};
 use penumbra_proof_params::{DummyWitness, VerifyingKeyExt, GROTH16_PROOF_LENGTH_BYTES};
 use penumbra_proto::{penumbra::core::component::shielded_pool::v1 as pb, DomainType};
@@ -826,30 +825,62 @@ impl ConstraintSynthesizer<Fq> for SettlementCircuit<MAX_PROOF_INPUT_ARRAY_SIZE>
 
 impl DummyWitness for SettlementCircuit<MAX_PROOF_INPUT_ARRAY_SIZE> {
     fn with_dummy_witness() -> Self {
-        let diversifier_bytes = [1u8; 16];
-        let pk_d_bytes = decaf377::Element::GENERATOR.vartime_compress().0;
-        let clue_key_bytes = [1; 32];
-        let diversifier = Diversifier(diversifier_bytes);
-        let address = Address::from_components(
-            diversifier,
-            ka::Public(pk_d_bytes),
-            fmd::ClueKey(clue_key_bytes),
-        )
-        .expect("generated 1 address");
-        let note = Note::from_parts(
-            address.clone(),
-            address,
-            "1upenumbra".parse().expect("valid value"),
-            Rseed([1u8; 32]),
-        )
-        .expect("can make a note");
+        let seed_phrase_randomness_1 = SeedPhrase::from_randomness(&[b'f'; 32]);
+        let sk_debtor =
+            SpendKey::from_seed_phrase_bip44(seed_phrase_randomness_1, &Bip44Path::new(0));
+        let fvk_debtor = sk_debtor.full_viewing_key();
+        let ivk_debtor = fvk_debtor.incoming();
+        let (d_addr, _dtk_d) = ivk_debtor.payment_address(0u32.into());
 
-        // Merkle tree circuit setup steps
+        let seed_phrase_randomness_2 = SeedPhrase::from_randomness(&[b'e'; 32]);
+        let sk_creditor =
+            SpendKey::from_seed_phrase_bip44(seed_phrase_randomness_2, &Bip44Path::new(0));
+        let fvk_creditor = sk_creditor.full_viewing_key();
+        let ivk_creditor = fvk_creditor.incoming();
+        let (c_addr, _dtk_d) = ivk_creditor.payment_address(0u32.into());
+
+        let d_c_inote_rseed = Rseed([1; 32]);
+        let c_d_inote_rseed = Rseed([2; 32]);
+
+        let value_to_send = "20upenumbra".parse().expect("valid value");
+        let d_c_inote = Note::from_parts(
+            d_addr.clone(),
+            c_addr.clone(),
+            value_to_send,
+            d_c_inote_rseed,
+        )
+        .expect("should be able to create note");
+        let d_c_inote_nul = Nullifier::derive(&d_c_inote);
+
+        let c_d_inote = Note::from_parts(
+            c_addr.clone(),
+            d_addr.clone(),
+            value_to_send,
+            c_d_inote_rseed,
+        )
+        .expect("should be able to create note");
+        let c_d_inote_nul = Nullifier::derive(&c_d_inote);
+
+        let value_reduced = "0upenumbra".parse().expect("valid value");
+        let d_c_onote = Note::from_parts(
+            d_addr.clone(),
+            c_addr.clone(),
+            value_reduced,
+            d_c_inote_rseed,
+        )
+        .expect("should be able to create note");
+        let d_c_onote_comm = d_c_onote.commit();
+        let c_d_onote = Note::from_parts(
+            c_addr.clone(),
+            d_addr.clone(),
+            value_reduced,
+            c_d_inote_rseed,
+        )
+        .expect("should be able to create note");
+        let c_d_onote_comm = c_d_onote.commit();
+
         let constants = SettlementProofConst::default();
-
-        // Enter duplicate commit to satisfy the need for >1 leaves in the `MerkleTree::new` function
-        let leaves: Vec<[Fq; 1]> = vec![[note.commit().0], [note.commit().0]];
-
+        let leaves: Vec<[Fq; 1]> = vec![[d_c_inote.commit().0], [c_d_inote.commit().0]];
         // Build tree with our one dummy note in order to get the merkle root value
         let tree = Poseidon377MerkleTree::new(
             &constants.leaf_crh_params,
@@ -858,16 +889,23 @@ impl DummyWitness for SettlementCircuit<MAX_PROOF_INPUT_ARRAY_SIZE> {
         )
         .unwrap();
 
-        // Get auth path from 0th leaf to root
-        let auth_path = tree.generate_proof(0).unwrap();
+        // Get auth path from 0th leaf to root (input note)
+        let input_auth_path_1 = tree.generate_proof(0).unwrap();
+        let input_auth_path_2 = tree.generate_proof(1).unwrap();
+
+        let s_addr = test_keys::ADDRESS_0.clone();
+        let (d_c_onote_ct, d_c_ss_ct, d_c_e_pk) =
+            encrypt_note_and_shared_secret(&d_c_inote, &d_c_onote, &c_addr, &s_addr).unwrap();
+        let (c_d_onote_ct, c_d_ss_ct, c_d_e_pk) =
+            encrypt_note_and_shared_secret(&c_d_inote, &c_d_onote, &d_addr, &s_addr).unwrap();
 
         let uncompressed_public = SettlementProofUncompressedPublic {
-            output_notes_commitments: [note.commit()],
-            nullifiers: [Nullifier::derive(&note)],
+            output_notes_commitments: [d_c_onote_comm, c_d_onote_comm],
+            nullifiers: [d_c_inote_nul, c_d_inote_nul],
             root: tree.root(),
-            note_ciphertexts: [vec![Fq::zero()]],
-            ss_ciphertexts: [vec![Fq::zero()]],
-            note_epks: [Public([0; 32])],
+            note_ciphertexts: [d_c_onote_ct, c_d_onote_ct],
+            ss_ciphertexts: [d_c_ss_ct, c_d_ss_ct],
+            note_epks: [d_c_e_pk, c_d_e_pk],
         };
         let public = uncompressed_public
             .clone()
@@ -876,16 +914,46 @@ impl DummyWitness for SettlementCircuit<MAX_PROOF_INPUT_ARRAY_SIZE> {
             .compress_to_public();
         let private = SettlementProofPrivate {
             uncompressed_public,
-            output_notes: [note.clone()],
-            input_notes: [note],
-            setoff_amount: Amount::zero(),
-            input_notes_proofs: [auth_path],
+            output_notes: [d_c_onote, c_d_onote],
+            input_notes: [d_c_inote, c_d_inote],
+            setoff_amount: Amount::from(20u8),
+            input_notes_proofs: [input_auth_path_1, input_auth_path_2],
             solver_ak: *test_keys::FULL_VIEWING_KEY.spend_verification_key(),
             solver_nk: *test_keys::FULL_VIEWING_KEY.nullifier_key(),
         };
 
-        SettlementCircuit::new(public, private).unwrap()
+        SettlementCircuit::new(public, private.padded().unwrap()).unwrap()
     }
+}
+
+pub fn encrypt_note_and_shared_secret(
+    inote: &Note,
+    onote: &Note,
+    c_addr: &Address,
+    s_addr: &Address,
+) -> anyhow::Result<(Ciphertext, Ciphertext, Public)> {
+    // Derive ephemeral secret key.
+    let e_sk = inote.rseed().derive_esk();
+
+    // Encrypt the output note.
+    let c_pk = c_addr.transmission_key();
+    let d_c_ss = e_sk.key_agreement_with(c_pk)?;
+    let d_c_ss_enc = Encoding(d_c_ss.0)
+        .vartime_decompress()
+        .map_err(|e| anyhow::anyhow!(e))?;
+    let onote_ct = ecies_encrypt(d_c_ss_enc, onote.to_field_elements().unwrap())
+        .map_err(|e| anyhow::anyhow!(e))?;
+
+    // Encrypt the shared secret for the solver.
+    let e_pk = e_sk.diversified_public(s_addr.diversified_generator());
+    let s_pk = s_addr.transmission_key();
+    let d_s_ss = e_sk.key_agreement_with(s_pk)?;
+    let d_s_ss_enc = Encoding(d_s_ss.0)
+        .vartime_decompress()
+        .map_err(|e| anyhow::anyhow!(e))?;
+    let d_c_ss_ct = ecies_encrypt(d_s_ss_enc, vec![d_c_ss_enc.vartime_compress_to_field()])?;
+
+    Ok((onote_ct, d_c_ss_ct, e_pk))
 }
 
 #[derive(Clone, Debug)]
@@ -939,27 +1007,7 @@ impl SettlementProof {
         let proof =
             Proof::deserialize_compressed_unchecked(&self.0[..]).map_err(|e| anyhow::anyhow!(e))?;
 
-        let mut public_inputs: Vec<Fq> = Vec::new();
-        public_inputs.extend(
-            public
-                .output_notes_commitments
-                .into_iter()
-                .map(|c| c.0.to_field_elements())
-                .collect::<Option<Vec<_>>>()
-                .ok_or_else(|| anyhow::anyhow!("note commitment is not a valid field element"))?
-                .iter()
-                .flatten(),
-        );
-        public_inputs.extend(
-            public
-                .nullifiers
-                .into_iter()
-                .map(|c| c.0.to_field_elements())
-                .collect::<Option<Vec<_>>>()
-                .ok_or_else(|| anyhow::anyhow!("nullifier is not a valid field element"))?
-                .iter()
-                .flatten(),
-        );
+        let public_inputs = vec![public_inputs_hash];
 
         tracing::trace!(?public_inputs);
         let start = std::time::Instant::now();
@@ -1073,36 +1121,6 @@ mod tests {
         let ivk_recipient = fvk_recipient.incoming();
         let (dest, _dtk_d) = ivk_recipient.payment_address(index.into());
         dest
-    }
-
-    pub fn encrypt_note_and_shared_secret(
-        inote: &Note,
-        onote: &Note,
-        c_addr: &Address,
-        s_addr: &Address,
-    ) -> anyhow::Result<(Ciphertext, Ciphertext, Public)> {
-        // Derive ephemeral secret key.
-        let e_sk = inote.rseed().derive_esk();
-
-        // Encrypt the output note.
-        let c_pk = c_addr.transmission_key();
-        let d_c_ss = e_sk.key_agreement_with(c_pk)?;
-        let d_c_ss_enc = Encoding(d_c_ss.0)
-            .vartime_decompress()
-            .map_err(|e| anyhow::anyhow!(e))?;
-        let onote_ct = ecies_encrypt(d_c_ss_enc, onote.to_field_elements().unwrap())
-            .map_err(|e| anyhow::anyhow!(e))?;
-
-        // Encrypt the shared secret for the solver.
-        let e_pk = e_sk.diversified_public(s_addr.diversified_generator());
-        let s_pk = s_addr.transmission_key();
-        let d_s_ss = e_sk.key_agreement_with(s_pk)?;
-        let d_s_ss_enc = Encoding(d_s_ss.0)
-            .vartime_decompress()
-            .map_err(|e| anyhow::anyhow!(e))?;
-        let d_c_ss_ct = ecies_encrypt(d_s_ss_enc, vec![d_c_ss_enc.vartime_compress_to_field()])?;
-
-        Ok((onote_ct, d_c_ss_ct, e_pk))
     }
 
     prop_compose! {
