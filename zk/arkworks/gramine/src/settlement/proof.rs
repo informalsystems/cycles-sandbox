@@ -25,7 +25,7 @@ use penumbra_keys::keys::{
     AuthorizationKeyVar, Bip44Path, IncomingViewingKeyVar, NullifierKey, NullifierKeyVar,
     SeedPhrase, SpendKey,
 };
-use penumbra_keys::{test_keys, Address};
+use penumbra_keys::{test_keys, Address, FullViewingKey};
 use penumbra_num::{Amount, AmountVar};
 use penumbra_proof_params::{DummyWitness, VerifyingKeyExt, GROTH16_PROOF_LENGTH_BYTES};
 use penumbra_proto::{penumbra::core::component::shielded_pool::v1 as pb, DomainType};
@@ -370,19 +370,21 @@ fn check_satisfaction(
         anyhow::bail!("Public inputs hash mismatch");
     }
 
+    let unpadded_len = private
+        .input_notes
+        .iter()
+        .position(|n| n.amount() == Amount::zero())
+        .unwrap_or(MAX_PROOF_INPUT_ARRAY_SIZE);
+
     // TODO: impl note well-formedness checks
-    // Loop over only the `public.len_inputs` real inputs
+
     for (note_commitment, note) in private
         .uncompressed_public
         .output_notes_commitments
         .iter()
+        .take(unpadded_len)
         .zip(private.output_notes.iter())
     {
-        // Break upon first padding element
-        if note_commitment.eq(&StateCommitment::padding_default()) {
-            break;
-        }
-
         if note.diversified_generator() == decaf377::Element::default() {
             anyhow::bail!("diversified generator is identity");
         }
@@ -397,13 +399,9 @@ fn check_satisfaction(
         .uncompressed_public
         .nullifiers
         .iter()
+        .take(unpadded_len)
         .zip(private.input_notes.iter())
     {
-        // Break upon first padding element
-        if nullifier.eq(&Nullifier::derive(note)) {
-            break;
-        }
-
         if nullifier != &Nullifier::derive(note) {
             anyhow::bail!("nullifier did not match public input");
         }
@@ -415,13 +413,9 @@ fn check_satisfaction(
     for (note, auth_path) in private
         .input_notes
         .iter()
+        .take(unpadded_len)
         .zip(private.input_notes_proofs.iter())
     {
-        // Break upon first padding element
-        if note.amount() == Amount::zero() {
-            break;
-        }
-
         let note_path_valid = auth_path.verify(
             &constants.leaf_crh_params,
             &constants.two_to_one_crh_params,
@@ -434,15 +428,12 @@ fn check_satisfaction(
         )
     }
 
-    let mut last_real_note = None;
-    for (i, notes) in private.input_notes.windows(2).enumerate() {
-        last_real_note = Some(i);
-
-        // Break upon first padding element
-        if notes[1].amount() == Amount::zero() {
-            break;
-        }
-
+    for (i, notes) in private
+        .input_notes
+        .windows(2)
+        .take(unpadded_len - 1) // stop before we get to pair where the second note is padded
+        .enumerate()
+    {
         anyhow::ensure!(
             notes[0].creditor() == notes[1].debtor(),
             "creditor does not match debtor in settlement flow"
@@ -450,7 +441,7 @@ fn check_satisfaction(
     }
     anyhow::ensure!(
         private.input_notes.first().unwrap().debtor()
-            == private.input_notes[last_real_note.unwrap()].creditor(),
+            == private.input_notes[unpadded_len - 1].creditor(),
         "first debtor does not match last creditor in settlement flow"
     );
 
@@ -459,12 +450,7 @@ fn check_satisfaction(
         "non-positive setoff amount"
     );
 
-    for input_note in &private.input_notes {
-        // Break upon first padding element
-        if input_note.amount() == Amount::zero() {
-            break;
-        }
-
+    for input_note in private.input_notes.iter().take(unpadded_len) {
         anyhow::ensure!(
             input_note.amount() >= private.setoff_amount,
             "note amount is less than setoff amount"
@@ -472,12 +458,7 @@ fn check_satisfaction(
     }
 
     let mut expected_output_notes = vec![];
-    for note in &private.input_notes {
-        // Break upon first padding element
-        if note.amount() == Amount::zero() {
-            break;
-        }
-
+    for note in private.input_notes.iter().take(unpadded_len) {
         let note = {
             let remainder = note.amount() - private.setoff_amount;
             let new_value = Value {
@@ -502,15 +483,11 @@ fn check_satisfaction(
         .uncompressed_public
         .ss_ciphertexts
         .iter()
+        .take(unpadded_len)
         .zip(private.uncompressed_public.note_epks.iter())
         .zip(private.output_notes.iter())
         .zip(private.uncompressed_public.note_ciphertexts.iter())
     {
-        // Break upon first padding element
-        if output_note.amount() == Amount::zero() {
-            break;
-        }
-
         // Compute the shared secret `s` by performing key agreement, decompressing, and decrypting.
         let s = {
             // Perform key agreement to obtain the shared secret used to encrypt the note's shared secret.
@@ -579,7 +556,7 @@ impl ConstraintSynthesizer<Fq> for SettlementCircuit<MAX_PROOF_INPUT_ARRAY_SIZE>
     fn generate_constraints(self, cs: ConstraintSystemRef<Fq>) -> ark_relations::r1cs::Result<()> {
         // Calculate the total number of non-padded elements in private and public input arrays
         // by finding the index of the first padded element
-        let real_inputs_count = if let Some(index) = self
+        let unpadded_len = if let Some(index) = self
             .private
             .uncompressed_public
             .output_notes_commitments
@@ -598,14 +575,14 @@ impl ConstraintSynthesizer<Fq> for SettlementCircuit<MAX_PROOF_INPUT_ARRAY_SIZE>
             .private
             .output_notes
             .iter()
-            .take(real_inputs_count)
+            .take(unpadded_len)
             .map(|note| NoteVar::new_witness(cs.clone(), || Ok(note.clone())))
             .collect::<Result<Vec<_>, _>>()?;
         let output_note_ser_vars = self
             .private
             .output_notes
             .iter()
-            .take(real_inputs_count)
+            .take(unpadded_len)
             .map(|note| {
                 note.to_field_elements()
                     .unwrap()
@@ -618,14 +595,14 @@ impl ConstraintSynthesizer<Fq> for SettlementCircuit<MAX_PROOF_INPUT_ARRAY_SIZE>
             .private
             .input_notes
             .iter()
-            .take(real_inputs_count)
+            .take(unpadded_len)
             .map(|note| NoteVar::new_witness(cs.clone(), || Ok(note.clone())))
             .collect::<Result<Vec<_>, _>>()?;
         let input_note_proof_vars = self
             .private
             .input_notes_proofs
             .iter()
-            .take(real_inputs_count)
+            .take(unpadded_len)
             .map(|auth_path| {
                 Poseidon377MerklePathVar::new_witness(ark_relations::ns!(cs, "path_var"), || {
                     Ok(auth_path)
@@ -641,7 +618,7 @@ impl ConstraintSynthesizer<Fq> for SettlementCircuit<MAX_PROOF_INPUT_ARRAY_SIZE>
         };
 
         let mut expected_output_note_commitment_vars = vec![];
-        for note in self.private.input_notes.iter().take(real_inputs_count) {
+        for note in self.private.input_notes.iter().take(unpadded_len) {
             let note_var = {
                 let remainder = note.amount() - self.private.setoff_amount;
                 let new_value = Value {
@@ -662,7 +639,7 @@ impl ConstraintSynthesizer<Fq> for SettlementCircuit<MAX_PROOF_INPUT_ARRAY_SIZE>
             .uncompressed_public
             .output_notes_commitments
             .iter()
-            .take(real_inputs_count)
+            .take(unpadded_len)
             .map(|commitment| StateCommitmentVar::new_input(cs.clone(), || Ok(*commitment)))
             .collect::<Result<Vec<_>, _>>()?;
         let nullifier_vars = self
@@ -670,7 +647,7 @@ impl ConstraintSynthesizer<Fq> for SettlementCircuit<MAX_PROOF_INPUT_ARRAY_SIZE>
             .uncompressed_public
             .nullifiers
             .iter()
-            .take(real_inputs_count)
+            .take(unpadded_len)
             .map(|nullifier| NullifierVar::new_input(cs.clone(), || Ok(*nullifier)))
             .collect::<Result<Vec<_>, _>>()?;
         let root_var =
@@ -681,7 +658,7 @@ impl ConstraintSynthesizer<Fq> for SettlementCircuit<MAX_PROOF_INPUT_ARRAY_SIZE>
             .uncompressed_public
             .note_ciphertexts
             .iter()
-            .take(real_inputs_count)
+            .take(unpadded_len)
             .map(|ss_ct| CiphertextVar::new_input(cs.clone(), || Ok(ss_ct.clone())))
             .collect::<Result<Vec<_>, _>>()?;
         let ss_ciphertext_vars = self
@@ -689,7 +666,7 @@ impl ConstraintSynthesizer<Fq> for SettlementCircuit<MAX_PROOF_INPUT_ARRAY_SIZE>
             .uncompressed_public
             .ss_ciphertexts
             .iter()
-            .take(real_inputs_count)
+            .take(unpadded_len)
             .map(|ss_ct| CiphertextVar::new_input(cs.clone(), || Ok(ss_ct.clone())))
             .collect::<Result<Vec<_>, _>>()?;
         let note_epk_vars = self
@@ -697,7 +674,7 @@ impl ConstraintSynthesizer<Fq> for SettlementCircuit<MAX_PROOF_INPUT_ARRAY_SIZE>
             .uncompressed_public
             .note_epks
             .iter()
-            .take(real_inputs_count)
+            .take(unpadded_len)
             .map(|epk| PublicKeyVar::new_input(cs.clone(), || Ok(*epk)))
             .collect::<Result<Vec<_>, _>>()?;
 
@@ -1101,8 +1078,8 @@ mod tests {
     use crate::note::{commitment, Note};
     use crate::nullifier::Nullifier;
     use crate::settlement::proof::{
-        check_circuit_satisfaction, check_satisfaction, SettlementProofConst,
-        SettlementProofUncompressedPublic,
+        check_circuit_satisfaction, check_satisfaction, encrypt_note_and_shared_secret,
+        SettlementProofConst, SettlementProofUncompressedPublic,
     };
     use crate::settlement::{
         proof::MAX_PROOF_INPUT_ARRAY_SIZE, SettlementProofPrivate, SettlementProofPublic,
