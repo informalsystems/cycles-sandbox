@@ -223,11 +223,18 @@ impl FixedSizePadding for NullifierVar {
 impl FixedSizePadding for Note {
     fn padding_default() -> Self {
         let mut rng = rand::thread_rng();
+        fn rand_address(seed: &[u8]) -> Address {
+            let randomness = SeedPhrase::from_randomness(seed);
+            let sk = SpendKey::from_seed_phrase_bip44(randomness, &Bip44Path::new(0));
+            let fvk = sk.full_viewing_key();
+            let ivk = fvk.incoming();
+            let (addr, _) = ivk.payment_address(0u32.into());
+            addr
+        }
 
-        // TODO: Consider moving to Option type
         Note::from_parts(
-            Address::dummy(&mut rng),
-            Address::dummy(&mut rng),
+            rand_address(&[1; 32]),
+            rand_address(&[2; 32]),
             Value {
                 amount: Amount::zero(),
                 asset_id: penumbra_asset::asset::Id(Fq::rand(&mut rng)),
@@ -394,7 +401,6 @@ fn check_satisfaction(
         }
     }
 
-    // Loop over only the `public.len_inputs` real inputs
     for (nullifier, note) in private
         .uncompressed_public
         .nullifiers
@@ -409,7 +415,7 @@ fn check_satisfaction(
 
     let constants = SettlementProofConst::default();
 
-    // `input_notes` vector is not padded`
+    // verify merkle proofs
     for (note, auth_path) in private
         .input_notes
         .iter()
@@ -428,11 +434,8 @@ fn check_satisfaction(
         )
     }
 
-    for (i, notes) in private
-        .input_notes
-        .windows(2)
-        .take(unpadded_len - 1) // stop before we get to pair where the second note is padded
-        .enumerate()
+    for notes in private.input_notes.windows(2).take(unpadded_len - 1)
+    // stop before we get to a pair where the second note is padded
     {
         anyhow::ensure!(
             notes[0].creditor() == notes[1].debtor(),
@@ -554,35 +557,18 @@ impl<const N: usize> SettlementCircuit<N> {
 
 impl ConstraintSynthesizer<Fq> for SettlementCircuit<MAX_PROOF_INPUT_ARRAY_SIZE> {
     fn generate_constraints(self, cs: ConstraintSystemRef<Fq>) -> ark_relations::r1cs::Result<()> {
-        // Calculate the total number of non-padded elements in private and public input arrays
-        // by finding the index of the first padded element
-        let unpadded_len = if let Some(index) = self
+        let unpadded_len = self
             .private
-            .uncompressed_public
-            .output_notes_commitments
+            .input_notes
             .iter()
-            .position(|c| *c == StateCommitment::padding_default())
-        {
-            // Convert zero-indexed position to total number
-            index
-        } else {
-            // If no padding elems exist, total number is array size
-            MAX_PROOF_INPUT_ARRAY_SIZE
-        };
+            .position(|n| n.amount() == Amount::zero())
+            .unwrap_or(MAX_PROOF_INPUT_ARRAY_SIZE);
 
-        // Witnesses (only non-padding elements)
-        let output_note_vars = self
-            .private
-            .output_notes
-            .iter()
-            .take(unpadded_len)
-            .map(|note| NoteVar::new_witness(cs.clone(), || Ok(note.clone())))
-            .collect::<Result<Vec<_>, _>>()?;
+        // Witnesses
         let output_note_ser_vars = self
             .private
             .output_notes
             .iter()
-            .take(unpadded_len)
             .map(|note| {
                 note.to_field_elements()
                     .unwrap()
@@ -591,24 +577,16 @@ impl ConstraintSynthesizer<Fq> for SettlementCircuit<MAX_PROOF_INPUT_ARRAY_SIZE>
                     .collect::<Vec<FqVar>>()
             })
             .collect::<Vec<Vec<FqVar>>>();
-        let input_note_vars = self
+        let output_note_vars = self
             .private
-            .input_notes
-            .iter()
-            .take(unpadded_len)
-            .map(|note| NoteVar::new_witness(cs.clone(), || Ok(note.clone())))
-            .collect::<Result<Vec<_>, _>>()?;
-        let input_note_proof_vars = self
-            .private
-            .input_notes_proofs
-            .iter()
-            .take(unpadded_len)
-            .map(|auth_path| {
-                Poseidon377MerklePathVar::new_witness(ark_relations::ns!(cs, "path_var"), || {
-                    Ok(auth_path)
-                })
+            .output_notes
+            .map(|note| NoteVar::new_witness(cs.clone(), || Ok(note.clone())).unwrap());
+        let input_note_proof_vars = self.private.input_notes_proofs.map(|auth_path| {
+            Poseidon377MerklePathVar::new_witness(ark_relations::ns!(cs, "path_var"), || {
+                Ok(auth_path)
             })
-            .collect::<Result<Vec<_>, _>>()?;
+            .unwrap()
+        });
         let setoff_var = AmountVar::new_witness(cs.clone(), || Ok(self.private.setoff_amount))?;
         let solver_ivk_var = {
             let ak_element_var: AuthorizationKeyVar =
@@ -618,7 +596,7 @@ impl ConstraintSynthesizer<Fq> for SettlementCircuit<MAX_PROOF_INPUT_ARRAY_SIZE>
         };
 
         let mut expected_output_note_commitment_vars = vec![];
-        for note in self.private.input_notes.iter().take(unpadded_len) {
+        for note in &self.private.input_notes {
             let note_var = {
                 let remainder = note.amount() - self.private.setoff_amount;
                 let new_value = Value {
@@ -632,24 +610,24 @@ impl ConstraintSynthesizer<Fq> for SettlementCircuit<MAX_PROOF_INPUT_ARRAY_SIZE>
             };
             expected_output_note_commitment_vars.push(note_var.commit()?);
         }
+        let input_note_vars = self
+            .private
+            .input_notes
+            .map(|note| NoteVar::new_witness(cs.clone(), || Ok(note.clone())).unwrap());
 
-        // Public inputs (only non-padding elements)
+        // Public inputs
         let output_note_commitment_vars = self
             .private
             .uncompressed_public
             .output_notes_commitments
-            .iter()
-            .take(unpadded_len)
-            .map(|commitment| StateCommitmentVar::new_input(cs.clone(), || Ok(*commitment)))
-            .collect::<Result<Vec<_>, _>>()?;
+            .map(|commitment| {
+                StateCommitmentVar::new_input(cs.clone(), || Ok(commitment)).unwrap()
+            });
         let nullifier_vars = self
             .private
             .uncompressed_public
             .nullifiers
-            .iter()
-            .take(unpadded_len)
-            .map(|nullifier| NullifierVar::new_input(cs.clone(), || Ok(*nullifier)))
-            .collect::<Result<Vec<_>, _>>()?;
+            .map(|nullifier| NullifierVar::new_input(cs.clone(), || Ok(nullifier)).unwrap());
         let root_var =
             RootVar::new_input(cs.clone(), || Ok(self.private.uncompressed_public.root))?;
         let pub_inputs_hash_var = FqVar::new_input(cs.clone(), || Ok(self.public.pub_inputs_hash))?;
@@ -657,26 +635,17 @@ impl ConstraintSynthesizer<Fq> for SettlementCircuit<MAX_PROOF_INPUT_ARRAY_SIZE>
             .private
             .uncompressed_public
             .note_ciphertexts
-            .iter()
-            .take(unpadded_len)
-            .map(|ss_ct| CiphertextVar::new_input(cs.clone(), || Ok(ss_ct.clone())))
-            .collect::<Result<Vec<_>, _>>()?;
+            .map(|ss_ct| CiphertextVar::new_input(cs.clone(), || Ok(ss_ct.clone())).unwrap());
         let ss_ciphertext_vars = self
             .private
             .uncompressed_public
             .ss_ciphertexts
-            .iter()
-            .take(unpadded_len)
-            .map(|ss_ct| CiphertextVar::new_input(cs.clone(), || Ok(ss_ct.clone())))
-            .collect::<Result<Vec<_>, _>>()?;
+            .map(|ss_ct| CiphertextVar::new_input(cs.clone(), || Ok(ss_ct.clone())).unwrap());
         let note_epk_vars = self
             .private
             .uncompressed_public
             .note_epks
-            .iter()
-            .take(unpadded_len)
-            .map(|epk| PublicKeyVar::new_input(cs.clone(), || Ok(*epk)))
-            .collect::<Result<Vec<_>, _>>()?;
+            .map(|epk| PublicKeyVar::new_input(cs.clone(), || Ok(epk)).unwrap());
 
         // Constants
         let constants = SettlementProofConst::default();
@@ -690,14 +659,10 @@ impl ConstraintSynthesizer<Fq> for SettlementCircuit<MAX_PROOF_INPUT_ARRAY_SIZE>
 
         // Confirm public input hash integrity
         // Need to re-pad the FqVar values. TODO: Try avoiding these function calls
-        let padded_commitments = &pad_to_fixed_size(&output_note_commitment_vars)
-            .map_err(|_| SynthesisError::Unsatisfiable)?;
-        let padded_nullifiers =
-            &pad_to_fixed_size(&nullifier_vars).map_err(|_| SynthesisError::Unsatisfiable)?;
         let computed_hash_var = calculate_pub_hash_var(
             cs.clone(),
-            &padded_commitments,
-            &padded_nullifiers,
+            &output_note_commitment_vars,
+            &nullifier_vars,
             &root_var,
         )?;
         computed_hash_var.enforce_equal(&pub_inputs_hash_var)?;
@@ -705,6 +670,7 @@ impl ConstraintSynthesizer<Fq> for SettlementCircuit<MAX_PROOF_INPUT_ARRAY_SIZE>
         // Note commitment integrity check
         for (output_note_commitment_var, output_note_var) in output_note_commitment_vars
             .iter()
+            .take(unpadded_len)
             .zip(output_note_vars.iter())
         {
             let note_commitment = output_note_var.commit()?;
@@ -712,13 +678,20 @@ impl ConstraintSynthesizer<Fq> for SettlementCircuit<MAX_PROOF_INPUT_ARRAY_SIZE>
         }
 
         // Nullifier integrity check
-        for (claimed_nullifier_var, note_var) in nullifier_vars.iter().zip(input_note_vars.iter()) {
+        for (claimed_nullifier_var, note_var) in nullifier_vars
+            .iter()
+            .take(unpadded_len)
+            .zip(input_note_vars.iter())
+        {
             let nullifier_var = NullifierVar::derive(note_var)?;
             nullifier_var.enforce_equal(claimed_nullifier_var)?;
         }
 
-        for (input_note_var, input_note_proof_var) in
-            input_note_vars.iter().zip(input_note_proof_vars.iter())
+        // verify merkle proofs
+        for (input_note_var, input_note_proof_var) in input_note_vars
+            .iter()
+            .take(unpadded_len)
+            .zip(input_note_proof_vars.iter())
         {
             let is_member = input_note_proof_var.verify_membership(
                 &leaf_crh_params_var,
@@ -729,7 +702,9 @@ impl ConstraintSynthesizer<Fq> for SettlementCircuit<MAX_PROOF_INPUT_ARRAY_SIZE>
             is_member.enforce_equal(&Boolean::TRUE)?;
         }
 
-        for input_note_var in input_note_vars.windows(2) {
+        for input_note_var in input_note_vars.windows(2).take(unpadded_len - 1)
+        // stop before we get to pair where the second note is padded
+        {
             let curr_creditor = &input_note_var[0].creditor;
             let next_debtor = &input_note_var[1].debtor;
             enforce_equal_addresses(curr_creditor, next_debtor)?;
@@ -739,7 +714,7 @@ impl ConstraintSynthesizer<Fq> for SettlementCircuit<MAX_PROOF_INPUT_ARRAY_SIZE>
             .map(|n| &n.debtor)
             .ok_or(SynthesisError::Unsatisfiable)?;
         let last_creditor = input_note_vars
-            .last()
+            .get(unpadded_len - 1)
             .map(|n| &n.creditor)
             .ok_or(SynthesisError::Unsatisfiable)?;
         enforce_equal_addresses(first_debtor, last_creditor)?;
@@ -752,7 +727,7 @@ impl ConstraintSynthesizer<Fq> for SettlementCircuit<MAX_PROOF_INPUT_ARRAY_SIZE>
             .enforce_cmp(&zero_var.amount, Ordering::Greater, false)?;
 
         // min_amount >= setoff_amount
-        for input_note_var in &input_note_vars {
+        for input_note_var in input_note_vars.iter().take(unpadded_len) {
             input_note_var.value.amount.amount.enforce_cmp(
                 &setoff_var.amount,
                 Ordering::Greater,
@@ -763,6 +738,7 @@ impl ConstraintSynthesizer<Fq> for SettlementCircuit<MAX_PROOF_INPUT_ARRAY_SIZE>
         // check output notes correspond to reduced input notes
         for (expected, claimed) in expected_output_note_commitment_vars
             .iter()
+            .take(unpadded_len)
             .zip(output_note_commitment_vars.iter())
         {
             expected.enforce_equal(claimed)?;
@@ -772,6 +748,7 @@ impl ConstraintSynthesizer<Fq> for SettlementCircuit<MAX_PROOF_INPUT_ARRAY_SIZE>
         for (((ss_ciphertext_var, epk_var), output_note_ser_var), note_ciphertext_var) in
             ss_ciphertext_vars
                 .iter()
+                .take(unpadded_len)
                 .zip(note_epk_vars.iter())
                 .zip(output_note_ser_vars.iter())
                 .zip(note_ciphertext_vars.iter())
@@ -1062,10 +1039,9 @@ impl<const N: usize> SettlementProofPrivate<N> {
 
 #[cfg(test)]
 mod tests {
-    use ark_ff::ToConstraintField;
     use arkworks_merkle_tree::poseidontree::Poseidon377MerkleTree;
     use decaf377::{Encoding, Fq};
-    use decaf377_ka::{Public, Secret, SharedSecret};
+    use decaf377_ka::{Secret, SharedSecret};
     use penumbra_asset::{asset, Value};
     use penumbra_keys::keys::{Bip44Path, SeedPhrase, SpendKey};
     use penumbra_keys::{test_keys, Address};
@@ -1074,7 +1050,7 @@ mod tests {
     use proptest::prelude::*;
     use rand_core::OsRng;
 
-    use crate::encryption::{ecies_decrypt, ecies_encrypt, Ciphertext};
+    use crate::encryption::{ecies_decrypt, ecies_encrypt};
     use crate::note::{commitment, Note};
     use crate::nullifier::Nullifier;
     use crate::settlement::proof::{
