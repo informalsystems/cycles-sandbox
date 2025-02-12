@@ -260,16 +260,7 @@ impl ToCanonicalEncoding for Note {
         let rseed_encoded: Vec<Fq> = fq_from_bytes_bijective(self.rseed.0).into_iter().collect();
         let debtor_encoded = self.debtor.canonical_encoding();
         let creditor_encoded = self.creditor.canonical_encoding();
-
-        // value: Value,
-        // /// A uniformly random 32-byte sequence used to derive an ephemeral secret key
-        // /// and note blinding factor.
-        // rseed: Rseed,
-        // /// The address controlling this note.
-        // debtor: Address,
-        // /// The credit of this note.
-        // creditor: Address,
-
+        
         vec![
             value_encoded,
             rseed_encoded,
