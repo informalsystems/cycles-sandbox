@@ -47,6 +47,7 @@ mod tests {
     use decaf377::{Element, Encoding, Fq};
     use decaf377_ka::{Secret, SharedSecret};
     use penumbra_asset::{asset::Id, Value};
+    use penumbra_keys::Address;
     use penumbra_shielded_pool::Rseed;
     use rand_core::OsRng;
 
@@ -73,30 +74,33 @@ mod tests {
     fn test_note_encryption_roundtrip() {
         let mut rng = OsRng;
 
-        let original = Note::from_parts(
-            penumbra_keys::test_keys::ADDRESS_1.clone(),
-            penumbra_keys::test_keys::ADDRESS_0.clone(),
-            Value {
-                amount: 10u64.into(),
-                asset_id: Id(Fq::from(1u64)),
-            },
-            Rseed::generate(&mut rng),
-        )
-        .expect("hardcoded note");
-
-
-        let r = Secret::new(&mut rng);
-        let receiver_sk = Secret::new(&mut rng);
-        let receiver_pk = receiver_sk.public();
-        let s = r.key_agreement_with(&receiver_pk).unwrap();
-
-        let msg: Vec<Fq> = original.canonical_encoding();
-
-        let ciphertext = ecies_encrypt(ss_as_element(s.clone()), msg.clone()).unwrap();
-        let msg_dec = ecies_decrypt(ss_as_element(s), ciphertext).unwrap();
-
-        let note = Note::canonical_decoding(&msg_dec).unwrap();
-
-        assert_eq!(note, original);
+        for _ in 0..100 {
+            let original = Note::from_parts(
+                Address::dummy(&mut rng),
+                Address::dummy(&mut rng),
+                Value {
+                    amount: 10u64.into(),
+                    asset_id: Id(Fq::from(1u64)),
+                },
+                Rseed::generate(&mut rng),
+            )
+            .expect("hardcoded note");
+    
+    
+            let r = Secret::new(&mut rng);
+            let receiver_sk = Secret::new(&mut rng);
+            let receiver_pk = receiver_sk.public();
+            let s = r.key_agreement_with(&receiver_pk).unwrap();
+    
+            let msg: Vec<Fq> = original.canonical_encoding();
+    
+            let ciphertext = ecies_encrypt(ss_as_element(s.clone()), msg.clone()).unwrap();
+            let msg_dec = ecies_decrypt(ss_as_element(s), ciphertext).unwrap();
+    
+            let note = Note::canonical_decoding(&msg_dec).unwrap();
+    
+            assert_eq!(note, original);
+    
+        }
     }
 }
