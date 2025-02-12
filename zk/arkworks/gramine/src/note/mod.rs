@@ -1,10 +1,12 @@
 use std::fmt;
 
+use ark_ff::ToConstraintField;
 use decaf377::Fq;
 use decaf377_fmd as fmd;
 use decaf377_ka as ka;
 use once_cell::sync::Lazy;
 use penumbra_asset::{asset, Value};
+use penumbra_keys::keys::{Diversifier, DIVERSIFIER_LEN_BYTES};
 use penumbra_keys::Address;
 use penumbra_num::Amount;
 use penumbra_shielded_pool::note::Error;
@@ -247,15 +249,149 @@ impl<'de> Deserialize<'de> for Note {
     }
 }
 
+
+trait ToCanonicalEncoding {
+    fn canonical_encoding(&self) -> Vec<Vec<Fq>>;
+}
+
+impl ToCanonicalEncoding for Note {
+    fn canonical_encoding(&self) -> Vec<Vec<Fq>> {
+        let value_encoded: Vec<Fq> = self.value.to_field_elements().unwrap();
+        let rseed_encoded: Vec<Fq> = fq_from_bytes_bijective(self.rseed.0).into_iter().collect();
+        let debtor_encoded = self.debtor.canonical_encoding();
+        let creditor_encoded = self.creditor.canonical_encoding();
+
+        // value: Value,
+        // /// A uniformly random 32-byte sequence used to derive an ephemeral secret key
+        // /// and note blinding factor.
+        // rseed: Rseed,
+        // /// The address controlling this note.
+        // debtor: Address,
+        // /// The credit of this note.
+        // creditor: Address,
+
+        vec![
+            value_encoded,
+            rseed_encoded,
+            debtor_encoded.into_iter().flatten().collect(),
+            creditor_encoded.into_iter().flatten().collect(),
+        ]
+    }
+}
+
+impl ToCanonicalEncoding for Address {
+    fn canonical_encoding(&self) -> Vec<Vec<Fq>> {
+        // Store the [u8; 16] diversifier bytes as an Fq
+        let diversifier = vec![Fq::from_le_bytes_mod_order(&self.diversifier().0)];
+        let pkd = vec![self.transmission_key_s().clone()];
+        let cluekey = fq_from_bytes_bijective(self.clue_key().0).into_iter().collect();
+        
+        vec![diversifier, pkd, cluekey]
+    }
+}
+
+impl ToCanonicalEncoding for Value {
+    fn canonical_encoding(&self) -> Vec<Vec<Fq>> {
+        let amount = self.amount.to_field_elements().unwrap();
+        let id = vec![self.asset_id.0];
+
+        vec![amount, id]
+    }
+}
+
+fn canonical_decode_note(note_fqs: Vec<Vec<Fq>>) -> Note {
+    use penumbra_asset::asset::Id;
+
+    let value_encoded = &note_fqs[0];
+    let rseed_encoded = &note_fqs[1];
+    let debtor_encoded = &note_fqs[2];
+    let creditor_encoded = &note_fqs[3];
+
+    let value = Value {
+        amount: Amount::from_le_bytes(
+            value_encoded[0]
+                .to_bytes()[..16]
+                .try_into()
+                .expect("slice length must be 16")
+        ),
+        asset_id: Id(value_encoded[1])
+    };
+
+    let rseed = Rseed(
+        fq_to_bytes_bijective(&[rseed_encoded[0], rseed_encoded[1]])
+    );
+
+    let debtor: Address = {
+        let diversifier_fq = debtor_encoded[0];
+        let transmission_key = debtor_encoded[1];
+        let clue_key_fq = &debtor_encoded[2..4];
+
+        let diversifier_bytes: [u8; DIVERSIFIER_LEN_BYTES] = diversifier_fq
+            .to_bytes()[..DIVERSIFIER_LEN_BYTES]
+            .try_into()
+            .expect("slice length must be DIVERSIFIER_LEN_BYTES");
+
+        let d: Diversifier = Diversifier(diversifier_bytes);
+        let pk_d = ka::Public(transmission_key.to_bytes());
+        let ck_d = decaf377_fmd::ClueKey(fq_to_bytes_bijective(&[clue_key_fq[0], clue_key_fq[1]]));
+        
+        Address::from_components(d, pk_d, ck_d).unwrap()
+    };
+
+    let creditor: Address = {
+        let diversifier_fq = creditor_encoded[0];
+        let transmission_key = creditor_encoded[1];
+        let clue_key_fq = &creditor_encoded[2..4];
+
+        let diversifier_bytes: [u8; DIVERSIFIER_LEN_BYTES] = diversifier_fq
+            .to_bytes()[..DIVERSIFIER_LEN_BYTES]
+            .try_into()
+            .expect("slice length must be DIVERSIFIER_LEN_BYTES");
+        
+        let d: Diversifier = Diversifier(diversifier_bytes);
+        let pk_d = ka::Public(transmission_key.to_bytes());
+        let ck_d = decaf377_fmd::ClueKey(fq_to_bytes_bijective(&[clue_key_fq[0], clue_key_fq[1]]));
+        
+        Address::from_components(d, pk_d, ck_d).unwrap()
+    };
+
+    Note::from_parts(debtor, creditor, value, rseed).unwrap()
+}
+
+fn fq_from_bytes_bijective(bytes: [u8; 32]) -> [Fq; 2] {
+    let mut bottom_bytes = bytes.clone();
+    bottom_bytes[31] = 0u8;
+    let mut top_bytes = [0u8; 32];
+    top_bytes[0] = bytes[31];
+
+    [
+        Fq::from_le_bytes_mod_order(&bottom_bytes),
+        Fq::from_le_bytes_mod_order(&top_bytes)
+    ]
+}
+
+fn fq_to_bytes_bijective(elements: &[Fq; 2]) -> [u8; 32] {
+    let bottom_bytes = elements[0].to_bytes();
+    let top_bytes = elements[1].to_bytes();
+
+    let mut bytes = [0u8; 32];
+    // The original lower 31 bytes will be the lower 31 bytes of bottom_bytes.
+    bytes[..31].copy_from_slice(&bottom_bytes[..31]);
+    // The original 32nd byte is stored in the least-significant position of top_bytes
+    bytes[31] = top_bytes[0];
+
+    bytes
+}
+
 #[cfg(test)]
 mod test {
-    use crate::note::Note;
+    use crate::note::{canonical_decode_note, Note, ToCanonicalEncoding};
     use decaf377::Fq;
     use penumbra_asset::asset::Id;
     use penumbra_asset::Value;
     use penumbra_keys::Address;
     use penumbra_shielded_pool::Rseed;
-    use rand::thread_rng;
+    use rand::{thread_rng, Rng, RngCore};
 
     #[test]
     fn test_serde_rountrip() {
@@ -274,5 +410,108 @@ mod test {
         let note_serialized = serde_json::to_vec(&note).unwrap();
         let note_deserialized = serde_json::from_slice(&note_serialized).unwrap();
         assert_eq!(note, note_deserialized);
+    }
+
+    #[test]
+    fn test_fq_roundtrip() {
+        let mut rng = thread_rng();
+        let note = Note::from_parts(
+            Address::dummy(&mut rng),
+            Address::dummy(&mut rng),
+            Value {
+                amount: 10u64.into(),
+                asset_id: Id(Fq::from(1u64)),
+            },
+            Rseed::generate(&mut rng),
+        )
+        .expect("hardcoded note");
+
+        let note_serialized: Vec<u8> = serde_json::to_vec(&note).unwrap();
+        println!("length 1 {}", note_serialized.len());
+        let fq_vec = u8_slice_to_fq_vec(&note_serialized);
+        let decoded_serialized_note = fq_vec_to_u8_slice(&fq_vec);
+        println!("length 2 {}", decoded_serialized_note.len());
+        assert_eq!(note_serialized, decoded_serialized_note);
+
+        let note_deserialized: Note = serde_json::from_slice(&decoded_serialized_note).unwrap();
+
+        assert_eq!(note, note_deserialized);
+    }
+
+    /// Converts an arbitrary slice of u8 into a Vec<Fq>, each u8 mapping to an Fq element.
+    /// This is a bijective mapping because every u8 (0..=255) is well within the field range.
+    pub fn u8_slice_to_fq_vec(data: &[u8]) -> Vec<Fq> {
+        // We use Fq::from(u64) which is available (as seen in other parts of the code).
+        data.iter().map(|&b| Fq::from(u64::from(b))).collect()
+    }
+
+    /// Converts a Vec<Fq> back into a Vec<u8>. This function will panic if any element
+    /// is not in the range 0..=255 (which shouldn’t happen if you only constructed the
+    /// Fq elements using u8_slice_to_fq_vec).
+    pub fn fq_vec_to_u8_slice(fqs: &[Fq]) -> Vec<u8> {
+        fqs.iter()
+            .map(|fq| {
+                // Convert the field element to its canonical little-endian bytes.
+                let bytes = fq.to_bytes();
+                // Ensure that the bytes representing high-order digits are all zero,
+                // so that the element really fits in a u8.
+                // (Our Fq elements come out as a 32-byte array; all bytes beyond the 0-th should be zero.)
+                if bytes[1..].iter().any(|&b| b != 0) {
+                    panic!("Fq element out of u8 range!");
+                }
+                bytes[0]
+            })
+            .collect()
+    }
+
+    #[test]
+    pub fn bijectivity_test() -> anyhow::Result<()> {
+        let mut rng = rand::thread_rng();
+
+        for _ in 0..100 {
+            let mut bytes = [0u8; 32];
+    
+            // Fill the first 31 bytes with arbitrary values.
+            rng.fill_bytes(&mut bytes[0..31]);
+    
+            // To make sure out values lie outside the canonical range, we set the top 3 bits to all 1's (top 8 actually)
+            bytes[31] = 0x0F;
+    
+            // Decode using the canonical checker, which enforces that the bytes are fully reduced.
+            let fq = Fq::from_le_bytes_mod_order(&bytes);
+    
+            // Re-encode the field element. This must yield exactly the same canonical bytes.
+            let encoded = fq.to_bytes();
+            assert_eq!(encoded, bytes, "Round-trip canonical encoding failed.");
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_canonical_note_roundtrip() {
+        let mut rng = thread_rng();
+
+        for _ in 0..1000 {
+            let original_note = Note::from_parts(
+                penumbra_keys::test_keys::ADDRESS_1.clone(),
+                penumbra_keys::test_keys::ADDRESS_0.clone(),
+                Value {
+                    amount: 10u64.into(),
+                    asset_id: Id(Fq::from(1u64)),
+                },
+                Rseed::generate(&mut rng),
+            )
+            .expect("hardcoded note");
+
+            // Canonically encode the note: this produces a Vec<Vec<Fq>> containing the field-element encodings.
+            let note_fqs = original_note.canonical_encoding();
+
+            // Decode the note by inverting the canonical encoding.
+            let decoded_note = canonical_decode_note(note_fqs);
+
+            // Assert the round-trip was successful.
+            assert_eq!(original_note, decoded_note);
+        }
     }
 }
