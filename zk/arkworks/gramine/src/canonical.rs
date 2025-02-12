@@ -36,21 +36,21 @@ impl CanonicalFqEncoding for Note {
 
 /// Implements the canonical decoding of a `Note` from a slice of field elements.
 /// 
-/// The slice must contain exactly **12** `Fq` elements:
+/// The slice must contain exactly **10** `Fq` elements:
 /// - `fqs[0..2]` for [`Value`]
 /// - `fqs[2..4]` for [`Rseed`]
-/// - `fqs[4..8]` for the debtor [`Address`]
-/// - `fqs[8..12]` for the creditor [`Address`]
+/// - `fqs[4..7]` for the debtor [`Address`]
+/// - `fqs[7..10]` for the creditor [`Address`]
 impl CanonicalFqDecoding for Note {
     fn canonical_decoding(fqs: &[Fq]) -> anyhow::Result<Note> {
-        if fqs.len() != 12 {
-            return Err(anyhow::anyhow!("Expected 12 Fq elements for Note, got {}", fqs.len()));
+        if fqs.len() != 10 {
+            return Err(anyhow::anyhow!("Expected 10 Fq elements for Note, got {}", fqs.len()));
         }
     
         let value_encoded = &fqs[0..2];
         let rseed_encoded = &fqs[2..4];
-        let debtor_encoded = &fqs[4..8];
-        let creditor_encoded = &fqs[8..12];
+        let debtor_encoded = &fqs[4..7];
+        let creditor_encoded = &fqs[7..10];
     
         let value = Value::canonical_decoding(value_encoded)?;
     
@@ -66,52 +66,64 @@ impl CanonicalFqDecoding for Note {
 
 impl CanonicalFqEncoding for Address {
     fn canonical_encoding(&self) -> Vec<Fq> {
-        // Store the [u8; 16] diversifier bytes as an Fq
-        let diversifier = Fq::from_le_bytes_mod_order(&self.diversifier().0);
-        let pkd = self.transmission_key_s().clone();
-        let cluekey = self.clue_key().0.canonical_encoding(); // [u8; 32] -> [Fq; 2] conversion
+        let address_bytes = self.to_vec();
+        assert_eq!(
+            address_bytes.len(),
+            80,
+            "Address bytes must be exactly 80 bytes"
+        );
         
-        vec![diversifier, pkd, cluekey[0], cluekey[1]]
+        let fq1 = {
+            let mut arr = [0u8; 32];
+            // first 30 bytes
+            arr[..30].copy_from_slice(&address_bytes[0..30]);
+            Fq::from_le_bytes_mod_order(&arr)
+        };
+
+        let fq2 = {
+            let mut arr = [0u8; 32];
+            // next 30 bytes
+            arr[..30].copy_from_slice(&address_bytes[30..60]);
+            Fq::from_le_bytes_mod_order(&arr)
+        };
+
+        let fq3 = {
+            let mut arr = [0u8; 32];
+            // final 20 bytes
+            arr[..20].copy_from_slice(&address_bytes[60..80]);
+            Fq::from_le_bytes_mod_order(&arr)
+        };
+
+        vec![fq1, fq2, fq3]
     }
 }
 
-/// Implements the canonical decoding of an [`Address`] from a slice of [`Fq`] elements.
+/// Decodes an [`Address`] from its canonical encoding as 3 [`Fq`] elements.
 ///
-/// The slice must contain exactly **4** `Fq` elements:
-/// - `fqs[0]`: Encodes the diversifier. Only the first `DIVERSIFIER_LEN_BYTES` of its canonical bytes
-///   are used to form a [`Diversifier`].
-/// - `fqs[1]`: Encodes the transmission key, whose canonical bytes are used as the public key component.
-/// - `fqs[2]` and `fqs[3]`: Together, these two elements encode the clue key via our bijective mapping.
-///
-/// # Errors
+/// Addresses are serialized to a constant 80 bytes. The 3 field elements represent
+/// the first 30 bytes, second 30 bytes, and last 20 bytes.
 ///
 /// Returns an error if:
 /// - The slice length is not exactly 4.
-/// - Converting the diversifier field into the required fixed-size array fails.
-/// - Constructing an [`Address`] from its components fails.
+/// - Constructing an [`Address`] from a byte array fails
 impl CanonicalFqDecoding for Address {
     fn canonical_decoding(fqs: &[Fq]) -> anyhow::Result<Address> {
-        if fqs.len() != 4 {
-            return Err(anyhow::anyhow!(
-                "Expected 4 Fq elements for Address, got {}",
-                fqs.len()
-            ));
+        if fqs.len() != 3 {
+            return Err(anyhow::anyhow!("Expected 3 Fq elements for Address decoding, got {}", fqs.len()));
         }
-        let diversifier_fq = fqs[0];
-        let transmission_fq = fqs[1];
-        let clue_key_fqs = &fqs[2..4];
-        
-        let diversifier_bytes: [u8; DIVERSIFIER_LEN_BYTES] = diversifier_fq
-            .to_bytes()[..DIVERSIFIER_LEN_BYTES]
-            .try_into()
-            .map_err(|_| anyhow::anyhow!("slice length must be DIVERSIFIER_LEN_BYTES for diversifier"))?;
 
-        let d = Diversifier(diversifier_bytes);
-        let pk_d = ka::Public(transmission_fq.to_bytes());
-        let ck_d = decaf377_fmd::ClueKey(<[u8; 32]>::canonical_decoding(&clue_key_fqs)?);
-        
-        Address::from_components(d, pk_d, ck_d)
-            .ok_or_else(|| anyhow::anyhow!("couldn't build Address from components"))
+        let bytes1 = fqs[0].to_bytes();
+        let bytes2 = fqs[1].to_bytes();
+        let bytes3 = fqs[2].to_bytes();
+
+        // Prepare an 80-byte buffer for the original address.
+        let mut addr_bytes = [0u8; 80];
+        addr_bytes[..30].copy_from_slice(&bytes1[..30]);
+        addr_bytes[30..60].copy_from_slice(&bytes2[..30]);
+        addr_bytes[60..80].copy_from_slice(&bytes3[..20]);
+
+        // Reconstruct the Address from the 80-byte representation
+        Address::try_from(addr_bytes.into_iter().collect::<Vec<u8>>())
     }
 }
 
