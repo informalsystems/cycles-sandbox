@@ -250,136 +250,9 @@ impl<'de> Deserialize<'de> for Note {
 }
 
 
-trait CanonicalFqEncoding {
-    fn canonical_encoding(&self) -> Vec<Fq>;
-}
-
-impl CanonicalFqEncoding for Note {
-    fn canonical_encoding(&self) -> Vec<Fq> {
-        let mut value_encoded = self.value.to_field_elements().unwrap();
-        let mut rseed_encoded = fq_from_bytes_bijective(self.rseed.0).into_iter().collect::<Vec<Fq>>();
-        let mut debtor_encoded = self.debtor.canonical_encoding();
-        let mut creditor_encoded = self.creditor.canonical_encoding();
-        
-        let mut res = Vec::new();
-        res.append(&mut value_encoded);
-        res.append(&mut rseed_encoded);
-        res.append(&mut debtor_encoded);
-        res.append(&mut creditor_encoded);
-
-        res
-    }
-}
-
-impl CanonicalFqEncoding for Address {
-    fn canonical_encoding(&self) -> Vec<Fq> {
-        // Store the [u8; 16] diversifier bytes as an Fq
-        let diversifier = Fq::from_le_bytes_mod_order(&self.diversifier().0);
-        let pkd = self.transmission_key_s().clone();
-        let cluekey: [Fq; 2] = fq_from_bytes_bijective(self.clue_key().0);
-        
-        vec![diversifier, pkd, cluekey[0], cluekey[1]]
-    }
-}
-
-impl CanonicalFqEncoding for Value {
-    fn canonical_encoding(&self) -> Vec<Fq> {
-        let amount = self.amount.to_field_elements().expect("expect amount encoding");
-        assert_eq!(amount.len(), 1);
-        let id = self.asset_id.0;
-
-        vec![amount[0], id]
-    }
-}
-
-
-fn canonical_decode_note(note_fqs: Vec<Fq>) -> Note {
-    use penumbra_asset::asset::Id;
-
-    let value_encoded = &note_fqs[0..2];
-    let rseed_encoded = &note_fqs[2..4];
-    let debtor_encoded = &note_fqs[4..8];
-    let creditor_encoded = &note_fqs[8..12];
-
-    let value = Value {
-        amount: Amount::from_le_bytes(
-            value_encoded[0]
-                .to_bytes()[..16]
-                .try_into()
-                .expect("slice length must be 16")
-        ),
-        asset_id: Id(value_encoded[1])
-    };
-
-    let rseed = Rseed(
-        fq_to_bytes_bijective(&[rseed_encoded[0], rseed_encoded[1]])
-    );
-
-    let debtor: Address = {
-        let diversifier_fq = debtor_encoded[0];
-        let transmission_key = debtor_encoded[1];
-        let clue_key_fq = &debtor_encoded[2..4];
-
-        let diversifier_bytes: [u8; DIVERSIFIER_LEN_BYTES] = diversifier_fq
-            .to_bytes()[..DIVERSIFIER_LEN_BYTES]
-            .try_into()
-            .expect("slice length must be DIVERSIFIER_LEN_BYTES");
-
-        let d: Diversifier = Diversifier(diversifier_bytes);
-        let pk_d = ka::Public(transmission_key.to_bytes());
-        let ck_d = decaf377_fmd::ClueKey(fq_to_bytes_bijective(&[clue_key_fq[0], clue_key_fq[1]]));
-        
-        Address::from_components(d, pk_d, ck_d).unwrap()
-    };
-
-    let creditor: Address = {
-        let diversifier_fq = creditor_encoded[0];
-        let transmission_key = creditor_encoded[1];
-        let clue_key_fq = &creditor_encoded[2..4];
-
-        let diversifier_bytes: [u8; DIVERSIFIER_LEN_BYTES] = diversifier_fq
-            .to_bytes()[..DIVERSIFIER_LEN_BYTES]
-            .try_into()
-            .expect("slice length must be DIVERSIFIER_LEN_BYTES");
-        
-        let d: Diversifier = Diversifier(diversifier_bytes);
-        let pk_d = ka::Public(transmission_key.to_bytes());
-        let ck_d = decaf377_fmd::ClueKey(fq_to_bytes_bijective(&[clue_key_fq[0], clue_key_fq[1]]));
-        
-        Address::from_components(d, pk_d, ck_d).unwrap()
-    };
-
-    Note::from_parts(debtor, creditor, value, rseed).unwrap()
-}
-
-fn fq_from_bytes_bijective(bytes: [u8; 32]) -> [Fq; 2] {
-    let mut bottom_bytes = bytes.clone();
-    bottom_bytes[31] = 0u8;
-    let mut top_bytes = [0u8; 32];
-    top_bytes[0] = bytes[31];
-
-    [
-        Fq::from_le_bytes_mod_order(&bottom_bytes),
-        Fq::from_le_bytes_mod_order(&top_bytes)
-    ]
-}
-
-fn fq_to_bytes_bijective(elements: &[Fq; 2]) -> [u8; 32] {
-    let bottom_bytes = elements[0].to_bytes();
-    let top_bytes = elements[1].to_bytes();
-
-    let mut bytes = [0u8; 32];
-    // The original lower 31 bytes will be the lower 31 bytes of bottom_bytes.
-    bytes[..31].copy_from_slice(&bottom_bytes[..31]);
-    // The original 32nd byte is stored in the least-significant position of top_bytes
-    bytes[31] = top_bytes[0];
-
-    bytes
-}
-
 #[cfg(test)]
 mod test {
-    use crate::note::{canonical_decode_note, Note, CanonicalFqEncoding};
+    use crate::{canonical::{CanonicalFqEncoding, CanonicalFqDecoding}, note::Note};
     use decaf377::Fq;
     use penumbra_asset::asset::Id;
     use penumbra_asset::Value;
@@ -440,7 +313,7 @@ mod test {
     }
 
     /// Converts a Vec<Fq> back into a Vec<u8>. This function will panic if any element
-    /// is not in the range 0..=255 (which shouldn’t happen if you only constructed the
+    /// is not in the range 0..=255 (which shouldn't happen if you only constructed the
     /// Fq elements using u8_slice_to_fq_vec).
     pub fn fq_vec_to_u8_slice(fqs: &[Fq]) -> Vec<u8> {
         fqs.iter()
@@ -502,7 +375,7 @@ mod test {
             let note_fqs = original_note.canonical_encoding();
 
             // Decode the note by inverting the canonical encoding.
-            let decoded_note = canonical_decode_note(note_fqs);
+            let decoded_note = Note::canonical_decoding(&note_fqs).unwrap();
 
             // Assert the round-trip was successful.
             assert_eq!(original_note, decoded_note);
