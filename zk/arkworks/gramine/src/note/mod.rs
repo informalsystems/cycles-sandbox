@@ -250,53 +250,56 @@ impl<'de> Deserialize<'de> for Note {
 }
 
 
-trait ToCanonicalEncoding {
-    fn canonical_encoding(&self) -> Vec<Vec<Fq>>;
+trait CanonicalFqEncoding {
+    fn canonical_encoding(&self) -> Vec<Fq>;
 }
 
-impl ToCanonicalEncoding for Note {
-    fn canonical_encoding(&self) -> Vec<Vec<Fq>> {
-        let value_encoded: Vec<Fq> = self.value.to_field_elements().unwrap();
-        let rseed_encoded: Vec<Fq> = fq_from_bytes_bijective(self.rseed.0).into_iter().collect();
-        let debtor_encoded = self.debtor.canonical_encoding();
-        let creditor_encoded = self.creditor.canonical_encoding();
+impl CanonicalFqEncoding for Note {
+    fn canonical_encoding(&self) -> Vec<Fq> {
+        let mut value_encoded = self.value.to_field_elements().unwrap();
+        let mut rseed_encoded = fq_from_bytes_bijective(self.rseed.0).into_iter().collect::<Vec<Fq>>();
+        let mut debtor_encoded = self.debtor.canonical_encoding();
+        let mut creditor_encoded = self.creditor.canonical_encoding();
         
-        vec![
-            value_encoded,
-            rseed_encoded,
-            debtor_encoded.into_iter().flatten().collect(),
-            creditor_encoded.into_iter().flatten().collect(),
-        ]
+        let mut res = Vec::new();
+        res.append(&mut value_encoded);
+        res.append(&mut rseed_encoded);
+        res.append(&mut debtor_encoded);
+        res.append(&mut creditor_encoded);
+
+        res
     }
 }
 
-impl ToCanonicalEncoding for Address {
-    fn canonical_encoding(&self) -> Vec<Vec<Fq>> {
+impl CanonicalFqEncoding for Address {
+    fn canonical_encoding(&self) -> Vec<Fq> {
         // Store the [u8; 16] diversifier bytes as an Fq
-        let diversifier = vec![Fq::from_le_bytes_mod_order(&self.diversifier().0)];
-        let pkd = vec![self.transmission_key_s().clone()];
-        let cluekey = fq_from_bytes_bijective(self.clue_key().0).into_iter().collect();
+        let diversifier = Fq::from_le_bytes_mod_order(&self.diversifier().0);
+        let pkd = self.transmission_key_s().clone();
+        let cluekey: [Fq; 2] = fq_from_bytes_bijective(self.clue_key().0);
         
-        vec![diversifier, pkd, cluekey]
+        vec![diversifier, pkd, cluekey[0], cluekey[1]]
     }
 }
 
-impl ToCanonicalEncoding for Value {
-    fn canonical_encoding(&self) -> Vec<Vec<Fq>> {
-        let amount = self.amount.to_field_elements().unwrap();
-        let id = vec![self.asset_id.0];
+impl CanonicalFqEncoding for Value {
+    fn canonical_encoding(&self) -> Vec<Fq> {
+        let amount = self.amount.to_field_elements().expect("expect amount encoding");
+        assert_eq!(amount.len(), 1);
+        let id = self.asset_id.0;
 
-        vec![amount, id]
+        vec![amount[0], id]
     }
 }
 
-fn canonical_decode_note(note_fqs: Vec<Vec<Fq>>) -> Note {
+
+fn canonical_decode_note(note_fqs: Vec<Fq>) -> Note {
     use penumbra_asset::asset::Id;
 
-    let value_encoded = &note_fqs[0];
-    let rseed_encoded = &note_fqs[1];
-    let debtor_encoded = &note_fqs[2];
-    let creditor_encoded = &note_fqs[3];
+    let value_encoded = &note_fqs[0..2];
+    let rseed_encoded = &note_fqs[2..4];
+    let debtor_encoded = &note_fqs[4..8];
+    let creditor_encoded = &note_fqs[8..12];
 
     let value = Value {
         amount: Amount::from_le_bytes(
@@ -376,7 +379,7 @@ fn fq_to_bytes_bijective(elements: &[Fq; 2]) -> [u8; 32] {
 
 #[cfg(test)]
 mod test {
-    use crate::note::{canonical_decode_note, Note, ToCanonicalEncoding};
+    use crate::note::{canonical_decode_note, Note, CanonicalFqEncoding};
     use decaf377::Fq;
     use penumbra_asset::asset::Id;
     use penumbra_asset::Value;
