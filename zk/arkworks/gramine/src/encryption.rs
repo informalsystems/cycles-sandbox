@@ -51,7 +51,11 @@ mod tests {
     use penumbra_shielded_pool::Rseed;
     use rand_core::OsRng;
 
-    use crate::{canonical::{CanonicalFqDecoding, CanonicalFqEncoding}, encryption::{ecies_decrypt, ecies_encrypt}, note::Note};
+    use crate::{
+        canonical::{CanonicalFqDecoding, CanonicalFqEncoding},
+        encryption::{ecies_decrypt, ecies_encrypt},
+        note::Note,
+    };
 
     fn ss_as_element(ss: SharedSecret) -> Element {
         Encoding(ss.0).vartime_decompress().unwrap()
@@ -85,22 +89,20 @@ mod tests {
                 Rseed::generate(&mut rng),
             )
             .expect("hardcoded note");
-    
-    
+
             let r = Secret::new(&mut rng);
             let receiver_sk = Secret::new(&mut rng);
             let receiver_pk = receiver_sk.public();
             let s = r.key_agreement_with(&receiver_pk).unwrap();
-    
+
             let msg: Vec<Fq> = original.canonical_encoding();
-    
+
             let ciphertext = ecies_encrypt(ss_as_element(s.clone()), msg.clone()).unwrap();
             let msg_dec = ecies_decrypt(ss_as_element(s), ciphertext).unwrap();
-    
+
             let note = Note::canonical_decoding(&msg_dec).unwrap();
-    
+
             assert_eq!(note, original);
-    
         }
     }
 }

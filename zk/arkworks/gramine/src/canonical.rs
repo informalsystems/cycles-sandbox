@@ -14,7 +14,9 @@ pub trait CanonicalFqEncoding {
 }
 
 pub trait CanonicalFqDecoding {
-    fn canonical_decoding(fqs: &[Fq]) -> anyhow::Result<Self> where Self: Sized;
+    fn canonical_decoding(fqs: &[Fq]) -> anyhow::Result<Self>
+    where
+        Self: Sized;
 }
 
 impl CanonicalFqEncoding for Note {
@@ -23,7 +25,7 @@ impl CanonicalFqEncoding for Note {
         let mut rseed_encoded = self.rseed().0.canonical_encoding(); // [u8; 32] -> [Fq; 2] conversion
         let mut debtor_encoded = self.debtor().canonical_encoding();
         let mut creditor_encoded = self.creditor().canonical_encoding();
-        
+
         let mut res = Vec::new();
         res.append(&mut value_encoded);
         res.append(&mut rseed_encoded);
@@ -35,7 +37,7 @@ impl CanonicalFqEncoding for Note {
 }
 
 /// Implements the canonical decoding of a `Note` from a slice of field elements.
-/// 
+///
 /// The slice must contain exactly **10** `Fq` elements:
 /// - `fqs[0..2]` for [`Value`]
 /// - `fqs[2..4]` for [`Rseed`]
@@ -44,22 +46,25 @@ impl CanonicalFqEncoding for Note {
 impl CanonicalFqDecoding for Note {
     fn canonical_decoding(fqs: &[Fq]) -> anyhow::Result<Note> {
         if fqs.len() != 10 {
-            return Err(anyhow::anyhow!("Expected 10 Fq elements for Note, got {}", fqs.len()));
+            return Err(anyhow::anyhow!(
+                "Expected 10 Fq elements for Note, got {}",
+                fqs.len()
+            ));
         }
-    
+
         let value_encoded = &fqs[0..2];
         let rseed_encoded = &fqs[2..4];
         let debtor_encoded = &fqs[4..7];
         let creditor_encoded = &fqs[7..10];
-    
+
         let value = Value::canonical_decoding(value_encoded)?;
-    
+
         // For Rseed, we use our bijective mapping from 32-byte encoding into 2 × Fq.
         let rseed = Rseed(<[u8; 32]>::canonical_decoding(&rseed_encoded)?);
-    
+
         let debtor = Address::canonical_decoding(debtor_encoded)?;
         let creditor = Address::canonical_decoding(creditor_encoded)?;
-    
+
         Note::from_parts(debtor, creditor, value, rseed).map_err(Into::into)
     }
 }
@@ -72,7 +77,7 @@ impl CanonicalFqEncoding for Address {
             80,
             "Address bytes must be exactly 80 bytes"
         );
-        
+
         let fq1 = {
             let mut arr = [0u8; 32];
             // first 30 bytes
@@ -109,7 +114,10 @@ impl CanonicalFqEncoding for Address {
 impl CanonicalFqDecoding for Address {
     fn canonical_decoding(fqs: &[Fq]) -> anyhow::Result<Address> {
         if fqs.len() != 3 {
-            return Err(anyhow::anyhow!("Expected 3 Fq elements for Address decoding, got {}", fqs.len()));
+            return Err(anyhow::anyhow!(
+                "Expected 3 Fq elements for Address decoding, got {}",
+                fqs.len()
+            ));
         }
 
         let bytes1 = fqs[0].to_bytes();
@@ -127,10 +135,12 @@ impl CanonicalFqDecoding for Address {
     }
 }
 
-
 impl CanonicalFqEncoding for Value {
     fn canonical_encoding(&self) -> Vec<Fq> {
-        let amount = self.amount.to_field_elements().expect("expect amount encoding");
+        let amount = self
+            .amount
+            .to_field_elements()
+            .expect("expect amount encoding");
         assert_eq!(amount.len(), 1);
         let id = self.asset_id.0;
 
@@ -163,13 +173,12 @@ impl CanonicalFqDecoding for Value {
             ));
         }
 
-        let amount_bytes: [u8; 16] = fqs[0]
-            .to_bytes()[..16]
+        let amount_bytes: [u8; 16] = fqs[0].to_bytes()[..16]
             .try_into()
             .map_err(|_| anyhow::anyhow!("slice length must be 16 for Amount"))?;
         let amount = Amount::from_le_bytes(amount_bytes);
         let asset_id = Id(fqs[1]);
-        
+
         Ok(Value { amount, asset_id })
     }
 }
@@ -189,10 +198,10 @@ impl CanonicalFqEncoding for [u8; 32] {
         bottom_bytes[31] = 0u8;
         let mut top_bytes = [0u8; 32];
         top_bytes[0] = self[31];
-    
+
         vec![
             Fq::from_le_bytes_mod_order(&bottom_bytes),
-            Fq::from_le_bytes_mod_order(&top_bytes)
+            Fq::from_le_bytes_mod_order(&top_bytes),
         ]
     }
 }
@@ -204,13 +213,13 @@ impl CanonicalFqDecoding for [u8; 32] {
     fn canonical_decoding(fqs: &[Fq]) -> anyhow::Result<[u8; 32]> {
         let bottom_bytes = fqs[0].to_bytes();
         let top_bytes = fqs[1].to_bytes();
-    
+
         let mut bytes = [0u8; 32];
         // The original lower 31 bytes will be the lower 31 bytes of bottom_bytes.
         bytes[..31].copy_from_slice(&bottom_bytes[..31]);
         // The original 32nd byte is stored in the least-significant position of top_bytes
         bytes[31] = top_bytes[0];
-    
+
         Ok(bytes)
     }
 }

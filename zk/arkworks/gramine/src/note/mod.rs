@@ -249,10 +249,12 @@ impl<'de> Deserialize<'de> for Note {
     }
 }
 
-
 #[cfg(test)]
 mod test {
-    use crate::{canonical::{CanonicalFqEncoding, CanonicalFqDecoding}, note::Note};
+    use crate::{
+        canonical::{CanonicalFqDecoding, CanonicalFqEncoding},
+        note::Note,
+    };
     use decaf377::Fq;
     use penumbra_asset::asset::Id;
     use penumbra_asset::Value;
@@ -337,16 +339,16 @@ mod test {
 
         for _ in 0..100 {
             let mut bytes = [0u8; 32];
-    
+
             // Fill the first 31 bytes with arbitrary values.
             rng.fill_bytes(&mut bytes[0..31]);
-    
+
             // To make sure out values lie outside the canonical range, we set the top 3 bits to all 1's (top 8 actually)
             bytes[31] = 0x0F;
-    
+
             // Decode using the canonical checker, which enforces that the bytes are fully reduced.
             let fq = Fq::from_le_bytes_mod_order(&bytes);
-    
+
             // Re-encode the field element. This must yield exactly the same canonical bytes.
             let encoded = fq.to_bytes();
             assert_eq!(encoded, bytes, "Round-trip canonical encoding failed.");
