@@ -38,6 +38,7 @@ use crate::encryption::r1cs::{CiphertextVar, PlaintextVar, PublicKeyVar, SharedS
 use crate::encryption::{ecies_decrypt, ecies_encrypt, r1cs, Ciphertext};
 use crate::note::{r1cs::enforce_equal_addresses, r1cs::NoteVar, Note};
 use crate::nullifier::{Nullifier, NullifierVar};
+use crate::output::OutputProof;
 
 pub static NULLIFIER_DOMAIN_SEP: Lazy<Fq> = Lazy::new(|| {
     Fq::from_le_bytes_mod_order(blake2b_simd::blake2b(b"penumbra.nullifier").as_bytes())
@@ -995,6 +996,12 @@ impl TryFrom<pb::ZkOutputProof> for SettlementProof {
 
     fn try_from(proto: pb::ZkOutputProof) -> Result<Self, Self::Error> {
         Ok(SettlementProof(proto.inner[..].try_into()?))
+    }
+}
+
+impl From<SettlementProof> for [u8; GROTH16_PROOF_LENGTH_BYTES] {
+    fn from(value: SettlementProof) -> Self {
+        value.0
     }
 }
 
