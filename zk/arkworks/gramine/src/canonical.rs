@@ -1,8 +1,6 @@
 use ark_ff::ToConstraintField;
 use decaf377::Fq;
-use decaf377_ka as ka;
 use penumbra_asset::Value;
-use penumbra_keys::keys::{Diversifier, DIVERSIFIER_LEN_BYTES};
 use penumbra_keys::Address;
 use penumbra_num::Amount;
 use penumbra_shielded_pool::Rseed;
