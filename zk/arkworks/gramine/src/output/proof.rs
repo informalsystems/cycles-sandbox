@@ -36,8 +36,8 @@ pub struct OutputProofPublic {
     pub rk: VerificationKey<SpendAuth>,
     /// Note ciphertext encrypted using the note's esk.
     pub note_ciphertext: Ciphertext,
-    /// Note ephemeral public key.
-    pub note_epk: Public,
+    /// Ephemeral public key.
+    pub epk: Public,
 }
 
 /// The private input for an [`OutputProof`].
@@ -52,8 +52,8 @@ pub struct OutputProofPrivate {
     /// The nullifier deriving key.
     // We only need this to check that the rk matches the note being committed to
     pub nk: NullifierKey,
-    /// Note ephemeral secret key.
-    pub note_esk: Secret,
+    /// Ephemeral secret key.
+    pub esk: Secret,
 }
 
 #[cfg(test)]
@@ -91,12 +91,12 @@ fn check_satisfaction(public: &OutputProofPublic, private: &OutputProofPrivate) 
 
     // Check encryption integrity
     let computed_epk = private
-        .note_esk
+        .esk
         .diversified_public(private.note.creditor().diversified_generator());
-    anyhow::ensure!(computed_epk == public.note_epk);
+    anyhow::ensure!(computed_epk == public.epk);
     let ss_elem = {
         let ss = private
-            .note_esk
+            .esk
             .key_agreement_with(private.note.creditor().transmission_key())?;
         Encoding(ss.0)
             .vartime_decompress()
@@ -167,7 +167,7 @@ impl ConstraintSynthesizer<Fq> for OutputCircuit {
                 .to_field_elements()
                 .ok_or_else(|| SynthesisError::Unsatisfiable)
         })?;
-        let note_esk_var = UInt8::new_witness_vec(cs.clone(), &self.private.note_esk.to_bytes())?;
+        let e_sk_var = UInt8::new_witness_vec(cs.clone(), &self.private.esk.to_bytes())?;
 
         // Public inputs
         let claimed_note_commitment =
@@ -175,7 +175,7 @@ impl ConstraintSynthesizer<Fq> for OutputCircuit {
         let rk_var = RandomizedVerificationKey::new_input(cs.clone(), || Ok(self.public.rk))?;
         let note_ciphertext_var =
             CiphertextVar::new_input(cs.clone(), || Ok(self.public.note_ciphertext))?;
-        let note_epk_var = PublicKeyVar::new_input(cs.clone(), || Ok(self.public.note_epk))?;
+        let e_pk_var = PublicKeyVar::new_input(cs.clone(), || Ok(self.public.epk))?;
 
         // Note commitment integrity
         let note_commitment = note_var.commit()?;
@@ -192,12 +192,12 @@ impl ConstraintSynthesizer<Fq> for OutputCircuit {
         computed_transmission_key.enforce_equal(&note_var.transmission_key())?;
 
         // Check encryption integrity
-        let esk_vars = note_esk_var.to_bits_le()?;
+        let esk_vars = e_sk_var.to_bits_le()?;
         let computed_epk_var = note_var
             .creditor
             .diversified_generator()
             .scalar_mul_le(esk_vars.to_bits_le()?.iter())?;
-        computed_epk_var.enforce_equal(&note_epk_var.0)?;
+        computed_epk_var.enforce_equal(&e_pk_var.0)?;
 
         let ss_var = SharedSecretVar(
             note_var
@@ -249,20 +249,20 @@ impl DummyWitness for OutputCircuit {
         let d_c_ss = e_sk.key_agreement_with(c_pk).unwrap();
         let d_c_ss_enc = Encoding(d_c_ss.0).vartime_decompress().unwrap();
         let note_ciphertext = ecies_encrypt(d_c_ss_enc, note.to_field_elements().unwrap()).unwrap();
-        let note_epk = e_sk.diversified_public(address_creditor.diversified_generator());
+        let e_pk = e_sk.diversified_public(address_creditor.diversified_generator());
 
         let public = OutputProofPublic {
             note_commitment: note.commit(),
             rk: rk_debtor,
             note_ciphertext,
-            note_epk,
+            epk: e_pk,
         };
         let private = OutputProofPrivate {
             note,
             spend_auth_randomizer,
             ak: ak_debtor,
             nk: nk_debtor,
-            note_esk: e_sk,
+            esk: e_sk,
         };
         OutputCircuit { public, private }
     }
@@ -436,10 +436,10 @@ mod tests {
             let d_c_ss_enc = Encoding(d_c_ss.0)
                 .vartime_decompress().unwrap();
             let note_ciphertext = ecies_encrypt(d_c_ss_enc, note.to_field_elements().unwrap()).unwrap();
-            let note_epk = e_sk.diversified_public(creditor_addr.diversified_generator());
+            let e_pk = e_sk.diversified_public(creditor_addr.diversified_generator());
 
-            let public = OutputProofPublic { note_commitment, rk: rk_debtor, note_ciphertext, note_epk };
-            let private = OutputProofPrivate { note, spend_auth_randomizer, ak, nk, note_esk: e_sk };
+            let public = OutputProofPublic { note_commitment, rk: rk_debtor, note_ciphertext, epk };
+            let private = OutputProofPrivate { note, spend_auth_randomizer, ak, nk, esk: e_sk };
 
             (public, private)
         }
@@ -505,11 +505,11 @@ mod tests {
             let d_c_ss_enc = Encoding(d_c_ss.0)
                 .vartime_decompress().unwrap();
             let note_ciphertext = ecies_encrypt(d_c_ss_enc, note.to_field_elements().unwrap()).unwrap();
-            let note_epk = e_sk.diversified_public(creditor_addr.diversified_generator());
+            let e_pk = e_sk.diversified_public(creditor_addr.diversified_generator());
 
 
-            let bad_public = OutputProofPublic { note_commitment: incorrect_note_commitment, rk, note_ciphertext, note_epk };
-            let private = OutputProofPrivate { note, spend_auth_randomizer, ak, nk, note_esk: e_sk };
+            let bad_public = OutputProofPublic { note_commitment: incorrect_note_commitment, rk, note_ciphertext, epk };
+            let private = OutputProofPrivate { note, spend_auth_randomizer, ak, nk, esk: e_sk };
 
             (bad_public, private)
         }
