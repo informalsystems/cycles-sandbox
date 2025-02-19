@@ -4,17 +4,21 @@ use std::str::FromStr;
 use anyhow::Result;
 use ark_groth16::r1cs_to_qap::LibsnarkReduction;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
-use decaf377::{Bls12_377, Fq, Fr};
+use decaf377::{Bls12_377, Encoding, Fq, Fr};
 use decaf377_rdsa::{SpendAuth, VerificationKey};
 
 use ark_ff::ToConstraintField;
 use ark_groth16::{Groth16, PreparedVerifyingKey, Proof, ProvingKey};
 use ark_r1cs_std::prelude::*;
-use ark_relations::r1cs::{ConstraintSynthesizer, ConstraintSystemRef};
+use ark_relations::r1cs::{ConstraintSynthesizer, ConstraintSystemRef, SynthesisError};
 use ark_snark::SNARK;
+use decaf377_ka::{Public, Secret};
 use penumbra_proto::{penumbra::core::component::shielded_pool::v1 as pb, DomainType};
 use penumbra_tct::r1cs::StateCommitmentVar;
 
+use crate::encryption::r1cs::{CiphertextVar, PlaintextVar, PublicKeyVar, SharedSecretVar};
+use crate::encryption::{ecies_encrypt, r1cs, Ciphertext};
+use crate::note::{r1cs::NoteVar, Note};
 use penumbra_asset::Value;
 use penumbra_keys::keys::{
     AuthorizationKeyVar, Bip44Path, IncomingViewingKeyVar, NullifierKey, NullifierKeyVar,
@@ -23,8 +27,6 @@ use penumbra_keys::keys::{
 use penumbra_proof_params::{DummyWitness, VerifyingKeyExt, GROTH16_PROOF_LENGTH_BYTES};
 use penumbra_shielded_pool::{note::StateCommitment, Rseed};
 
-use crate::note::{r1cs::NoteVar, Note};
-
 /// The public input for an [`OutputProof`].
 #[derive(Clone, Debug)]
 pub struct OutputProofPublic {
@@ -32,6 +34,10 @@ pub struct OutputProofPublic {
     pub note_commitment: StateCommitment,
     /// the randomized verification spend key.
     pub rk: VerificationKey<SpendAuth>,
+    /// Note ciphertext encrypted using the note's esk.
+    pub note_ciphertext: Ciphertext,
+    /// Note ephemeral public key.
+    pub note_epk: Public,
 }
 
 /// The private input for an [`OutputProof`].
@@ -46,6 +52,8 @@ pub struct OutputProofPrivate {
     /// The nullifier deriving key.
     // We only need this to check that the rk matches the note being committed to
     pub nk: NullifierKey,
+    /// Note ephemeral secret key.
+    pub note_esk: Secret,
 }
 
 #[cfg(test)]
@@ -80,6 +88,23 @@ fn check_satisfaction(public: &OutputProofPublic, private: &OutputProofPrivate) 
     if private.ak.is_identity() {
         anyhow::bail!("ak is identity");
     }
+
+    // Check encryption integrity
+    let computed_epk = private
+        .note_esk
+        .diversified_public(private.note.creditor().diversified_generator());
+    anyhow::ensure!(computed_epk == public.note_epk);
+    let ss_elem = {
+        let ss = private
+            .note_esk
+            .key_agreement_with(private.note.creditor().transmission_key())?;
+        Encoding(ss.0)
+            .vartime_decompress()
+            .map_err(|e| anyhow::anyhow!(e))?
+    };
+    let note_field_elements = private.note.to_field_elements().unwrap();
+    let computed_ciphertext = ecies_encrypt(ss_elem, note_field_elements)?;
+    anyhow::ensure!(computed_ciphertext == *public.note_ciphertext);
 
     Ok(())
 }
@@ -129,7 +154,6 @@ impl ConstraintSynthesizer<Fq> for OutputCircuit {
         // Witnesses
         // Note: In the allocation of the address on `NoteVar`, we check the diversified base is not identity.
         let note_var = NoteVar::new_witness(cs.clone(), || Ok(self.private.note.clone()))?;
-
         let spend_auth_randomizer_var = SpendAuthRandomizerVar::new_witness(cs.clone(), || {
             Ok(self.private.spend_auth_randomizer)
         })?;
@@ -137,11 +161,21 @@ impl ConstraintSynthesizer<Fq> for OutputCircuit {
         let ak_element_var: AuthorizationKeyVar =
             AuthorizationKeyVar::new_witness(cs.clone(), || Ok(self.private.ak))?;
         let nk_var = NullifierKeyVar::new_witness(cs.clone(), || Ok(self.private.nk))?;
+        let note_fq_var = PlaintextVar::new_witness(cs.clone(), || {
+            self.private
+                .note
+                .to_field_elements()
+                .ok_or_else(|| SynthesisError::Unsatisfiable)
+        })?;
+        let note_esk_var = UInt8::new_witness_vec(cs.clone(), &self.private.note_esk.to_bytes())?;
 
         // Public inputs
         let claimed_note_commitment =
             StateCommitmentVar::new_input(cs.clone(), || Ok(self.public.note_commitment))?;
         let rk_var = RandomizedVerificationKey::new_input(cs.clone(), || Ok(self.public.rk))?;
+        let note_ciphertext_var =
+            CiphertextVar::new_input(cs.clone(), || Ok(self.public.note_ciphertext))?;
+        let note_epk_var = PublicKeyVar::new_input(cs.clone(), || Ok(self.public.note_epk))?;
 
         // Note commitment integrity
         let note_commitment = note_var.commit()?;
@@ -156,6 +190,23 @@ impl ConstraintSynthesizer<Fq> for OutputCircuit {
         let computed_transmission_key =
             ivk.diversified_public(&note_var.diversified_generator())?;
         computed_transmission_key.enforce_equal(&note_var.transmission_key())?;
+
+        // Check encryption integrity
+        let esk_vars = note_esk_var.to_bits_le()?;
+        let computed_epk_var = note_var
+            .creditor
+            .diversified_generator()
+            .scalar_mul_le(esk_vars.to_bits_le()?.iter())?;
+        computed_epk_var.enforce_equal(&note_epk_var.0)?;
+
+        let ss_var = SharedSecretVar(
+            note_var
+                .creditor
+                .transmission_key()
+                .scalar_mul_le(esk_vars.to_bits_le()?.iter())?,
+        );
+        let computed_note_ciphertext_var = r1cs::ecies_encrypt(&ss_var, &note_fq_var)?;
+        computed_note_ciphertext_var.enforce_equal(&note_ciphertext_var)?;
 
         Ok(())
     }
@@ -184,21 +235,34 @@ impl DummyWitness for OutputCircuit {
 
         let note = Note::from_parts(
             address_debtor,
-            address_creditor,
+            address_creditor.clone(),
             Value::from_str("1upenumbra").expect("valid value"),
             Rseed([1u8; 32]),
         )
         .expect("can make a note");
 
+        // Derive ephemeral secret key.
+        let e_sk = note.rseed().derive_esk();
+
+        // Encrypt the output note.
+        let c_pk = address_creditor.transmission_key();
+        let d_c_ss = e_sk.key_agreement_with(c_pk).unwrap();
+        let d_c_ss_enc = Encoding(d_c_ss.0).vartime_decompress().unwrap();
+        let note_ciphertext = ecies_encrypt(d_c_ss_enc, note.to_field_elements().unwrap()).unwrap();
+        let note_epk = e_sk.diversified_public(address_creditor.diversified_generator());
+
         let public = OutputProofPublic {
             note_commitment: note.commit(),
             rk: rk_debtor,
+            note_ciphertext,
+            note_epk,
         };
         let private = OutputProofPrivate {
             note,
             spend_auth_randomizer,
             ak: ak_debtor,
             nk: nk_debtor,
+            note_esk: e_sk,
         };
         OutputCircuit { public, private }
     }
@@ -357,14 +421,25 @@ mod tests {
             };
             let note = Note::from_parts(
                 debtor_addr,
-                creditor_addr,
+                creditor_addr.clone(),
                 value_to_send,
                 Rseed(rseed_randomness),
             ).expect("should be able to create note");
             let note_commitment = note.commit();
 
-            let public = OutputProofPublic { note_commitment, rk: rk_debtor };
-            let private = OutputProofPrivate { note, spend_auth_randomizer, ak, nk };
+            // Derive ephemeral secret key.
+            let e_sk = note.rseed().derive_esk();
+
+            // Encrypt the output note.
+            let c_pk = creditor_addr.transmission_key();
+            let d_c_ss = e_sk.key_agreement_with(c_pk).unwrap();
+            let d_c_ss_enc = Encoding(d_c_ss.0)
+                .vartime_decompress().unwrap();
+            let note_ciphertext = ecies_encrypt(d_c_ss_enc, note.to_field_elements().unwrap()).unwrap();
+            let note_epk = e_sk.diversified_public(creditor_addr.diversified_generator());
+
+            let public = OutputProofPublic { note_commitment, rk: rk_debtor, note_ciphertext, note_epk };
+            let private = OutputProofPrivate { note, spend_auth_randomizer, ak, nk, note_esk: e_sk };
 
             (public, private)
         }
@@ -407,7 +482,7 @@ mod tests {
             };
             let note = Note::from_parts(
                 debtor_addr,
-                creditor_addr,
+                creditor_addr.clone(),
                 value_to_send,
                 Rseed(rseed_randomness),
             ).expect("should be able to create note");
@@ -421,8 +496,20 @@ mod tests {
                 *note.creditor().transmission_key_s()
             );
 
-            let bad_public = OutputProofPublic { note_commitment: incorrect_note_commitment, rk };
-            let private = OutputProofPrivate { note, spend_auth_randomizer, ak, nk };
+            // Derive ephemeral secret key.
+            let e_sk = note.rseed().derive_esk();
+
+            // Encrypt the output note.
+            let c_pk = creditor_addr.transmission_key();
+            let d_c_ss = e_sk.key_agreement_with(c_pk).unwrap();
+            let d_c_ss_enc = Encoding(d_c_ss.0)
+                .vartime_decompress().unwrap();
+            let note_ciphertext = ecies_encrypt(d_c_ss_enc, note.to_field_elements().unwrap()).unwrap();
+            let note_epk = e_sk.diversified_public(creditor_addr.diversified_generator());
+
+
+            let bad_public = OutputProofPublic { note_commitment: incorrect_note_commitment, rk, note_ciphertext, note_epk };
+            let private = OutputProofPrivate { note, spend_auth_randomizer, ak, nk, note_esk: e_sk };
 
             (bad_public, private)
         }
