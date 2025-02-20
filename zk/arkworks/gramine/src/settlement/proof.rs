@@ -38,7 +38,6 @@ use crate::encryption::r1cs::{CiphertextVar, PlaintextVar, PublicKeyVar, SharedS
 use crate::encryption::{ecies_encrypt, r1cs, Ciphertext};
 use crate::note::{r1cs::enforce_equal_addresses, r1cs::NoteVar, Note};
 use crate::nullifier::{Nullifier, NullifierVar};
-use crate::output::OutputProof;
 
 pub static NULLIFIER_DOMAIN_SEP: Lazy<Fq> = Lazy::new(|| {
     Fq::from_le_bytes_mod_order(blake2b_simd::blake2b(b"penumbra.nullifier").as_bytes())
