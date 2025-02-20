@@ -1,8 +1,6 @@
 use ark_ff::ToConstraintField;
 use decaf377::Fq;
-use decaf377_ka as ka;
 use penumbra_asset::Value;
-use penumbra_keys::keys::{Diversifier, DIVERSIFIER_LEN_BYTES};
 use penumbra_keys::Address;
 use penumbra_num::Amount;
 use penumbra_shielded_pool::Rseed;
@@ -60,7 +58,7 @@ impl CanonicalFqDecoding for Note {
         let value = Value::canonical_decoding(value_encoded)?;
 
         // For Rseed, we use our bijective mapping from 32-byte encoding into 2 × Fq.
-        let rseed = Rseed(<[u8; 32]>::canonical_decoding(&rseed_encoded)?);
+        let rseed = Rseed(<[u8; 32]>::canonical_decoding(rseed_encoded)?);
 
         let debtor = Address::canonical_decoding(debtor_encoded)?;
         let creditor = Address::canonical_decoding(creditor_encoded)?;
@@ -194,7 +192,7 @@ impl CanonicalFqDecoding for Value {
 /// This mapping is reversible via [`CanonicalFqDecoding`]
 impl CanonicalFqEncoding for [u8; 32] {
     fn canonical_encoding(&self) -> Vec<Fq> {
-        let mut bottom_bytes = self.clone();
+        let mut bottom_bytes = *self;
         bottom_bytes[31] = 0u8;
         let mut top_bytes = [0u8; 32];
         top_bytes[0] = self[31];

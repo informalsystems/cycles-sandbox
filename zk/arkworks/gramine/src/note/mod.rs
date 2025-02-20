@@ -1,12 +1,10 @@
 use std::fmt;
 
-use ark_ff::ToConstraintField;
 use decaf377::Fq;
 use decaf377_fmd as fmd;
 use decaf377_ka as ka;
 use once_cell::sync::Lazy;
 use penumbra_asset::{asset, Value};
-use penumbra_keys::keys::{Diversifier, DIVERSIFIER_LEN_BYTES};
 use penumbra_keys::Address;
 use penumbra_num::Amount;
 use penumbra_shielded_pool::note::Error;
@@ -260,7 +258,7 @@ mod test {
     use penumbra_asset::Value;
     use penumbra_keys::Address;
     use penumbra_shielded_pool::Rseed;
-    use rand::{thread_rng, Rng, RngCore};
+    use rand::{thread_rng, RngCore};
 
     #[test]
     fn test_serde_rountrip() {

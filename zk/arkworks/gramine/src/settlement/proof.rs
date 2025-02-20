@@ -25,7 +25,7 @@ use penumbra_keys::keys::{
     AuthorizationKeyVar, Bip44Path, IncomingViewingKeyVar, NullifierKey, NullifierKeyVar,
     SeedPhrase, SpendKey,
 };
-use penumbra_keys::{test_keys, Address, FullViewingKey};
+use penumbra_keys::{test_keys, Address};
 use penumbra_num::{Amount, AmountVar};
 use penumbra_proof_params::{DummyWitness, VerifyingKeyExt, GROTH16_PROOF_LENGTH_BYTES};
 use penumbra_proto::{penumbra::core::component::shielded_pool::v1 as pb, DomainType};
@@ -35,10 +35,9 @@ use poseidon377::{RATE_1_PARAMS, RATE_2_PARAMS};
 use poseidon_parameters::v1::Matrix;
 
 use crate::encryption::r1cs::{CiphertextVar, PlaintextVar, PublicKeyVar, SharedSecretVar};
-use crate::encryption::{ecies_decrypt, ecies_encrypt, r1cs, Ciphertext};
+use crate::encryption::{ecies_encrypt, r1cs, Ciphertext};
 use crate::note::{r1cs::enforce_equal_addresses, r1cs::NoteVar, Note};
 use crate::nullifier::{Nullifier, NullifierVar};
-use crate::output::OutputProof;
 
 pub static NULLIFIER_DOMAIN_SEP: Lazy<Fq> = Lazy::new(|| {
     Fq::from_le_bytes_mod_order(blake2b_simd::blake2b(b"penumbra.nullifier").as_bytes())
@@ -368,6 +367,9 @@ fn check_satisfaction(
     public: &SettlementProofPublic,
     private: &SettlementProofPrivate<MAX_PROOF_INPUT_ARRAY_SIZE>,
 ) -> Result<()> {
+    use crate::encryption::ecies_decrypt;
+    use penumbra_keys::FullViewingKey;
+
     if public.pub_inputs_hash
         != calculate_pub_hash(
             &private.uncompressed_public.output_notes_commitments,
