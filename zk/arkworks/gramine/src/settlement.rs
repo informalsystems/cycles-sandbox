@@ -1,5 +1,6 @@
 mod proof;
 
 pub use proof::{
-    SettlementCircuit, SettlementProof, SettlementProofPrivate, SettlementProofPublic,
+    SettlementCircuit, SettlementProof, SettlementProofConst, SettlementProofPrivate,
+    SettlementProofPublic, SettlementProofUncompressedPublic,
 };
