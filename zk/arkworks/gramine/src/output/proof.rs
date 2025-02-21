@@ -302,29 +302,39 @@ impl OutputProof {
     pub fn verify(
         &self,
         vk: &PreparedVerifyingKey<Bls12_377>,
-        public: OutputProofPublic,
+        OutputProofPublic {
+            note_commitment,
+            rk,
+            note_ciphertext,
+            e_pk,
+        }: OutputProofPublic,
     ) -> anyhow::Result<()> {
+        let note_commitment_fqs = note_commitment
+            .0
+            .to_field_elements()
+            .ok_or_else(|| anyhow::anyhow!("note commitment is not a valid field element"))?;
+        let rk_fqs = Encoding(rk.to_bytes())
+            .vartime_decompress()
+            .map_err(|_| anyhow::anyhow!("could not decompress element points"))?
+            .vartime_compress_to_field();
+        let note_ciphertext_fqs = note_ciphertext.to_field_elements().ok_or_else(|| {
+            anyhow::anyhow!("note ciphertext is not composed of only field element")
+        })?;
+        let e_pk_fqs = Encoding(e_pk.0)
+            .vartime_decompress()
+            .map_err(|_| anyhow::anyhow!("could not decompress element points"))?
+            .vartime_compress_to_field();
+
+        let mut public_inputs = Vec::new();
+        public_inputs.extend(note_commitment_fqs);
+        public_inputs.extend([rk_fqs]);
+        public_inputs.extend(note_ciphertext_fqs);
+        public_inputs.extend([e_pk_fqs]);
+        tracing::trace!(?public_inputs);
+
         let proof =
             Proof::deserialize_compressed_unchecked(&self.0[..]).map_err(|e| anyhow::anyhow!(e))?;
 
-        let mut public_inputs = Vec::new();
-        public_inputs.extend(
-            public
-                .note_commitment
-                .0
-                .to_field_elements()
-                .ok_or_else(|| anyhow::anyhow!("note commitment is not a valid field element"))?,
-        );
-        let element_rk = decaf377::Encoding(public.rk.to_bytes())
-            .vartime_decompress()
-            .map_err(|_| anyhow::anyhow!("could not decompress element points"))?;
-        public_inputs.extend(
-            element_rk
-                .to_field_elements()
-                .ok_or_else(|| anyhow::anyhow!("rk is not a valid field element"))?,
-        );
-
-        tracing::trace!(?public_inputs);
         let start = std::time::Instant::now();
         let proof_result = Groth16::<Bls12_377, LibsnarkReduction>::verify_with_processed_vk(
             vk,
