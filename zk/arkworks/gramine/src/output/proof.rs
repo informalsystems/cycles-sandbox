@@ -1,32 +1,31 @@
-use base64::prelude::*;
 use std::str::FromStr;
 
 use anyhow::Result;
-use ark_groth16::r1cs_to_qap::LibsnarkReduction;
-use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
-use decaf377::{Bls12_377, Encoding, Fq, Fr};
-use decaf377_rdsa::{SpendAuth, VerificationKey};
-
 use ark_ff::ToConstraintField;
+use ark_groth16::r1cs_to_qap::LibsnarkReduction;
 use ark_groth16::{Groth16, PreparedVerifyingKey, Proof, ProvingKey};
 use ark_r1cs_std::prelude::*;
-use ark_relations::r1cs::{ConstraintSynthesizer, ConstraintSystemRef, SynthesisError};
+use ark_relations::r1cs::{ConstraintSynthesizer, ConstraintSystemRef};
+use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_snark::SNARK;
+use base64::prelude::*;
+use decaf377::{Bls12_377, Encoding, Fq, Fr};
 use decaf377_ka::{Public, Secret};
-use penumbra_proto::{penumbra::core::component::shielded_pool::v1 as pb, DomainType};
-use penumbra_tct::r1cs::StateCommitmentVar;
-
-use crate::canonical::CanonicalFqEncoding;
-use crate::encryption::r1cs::{CiphertextVar, PlaintextVar, PublicKeyVar, SharedSecretVar};
-use crate::encryption::{ecies_encrypt, r1cs, Ciphertext};
-use crate::note::{r1cs::NoteVar, Note};
+use decaf377_rdsa::{SpendAuth, VerificationKey};
 use penumbra_asset::Value;
 use penumbra_keys::keys::{
     AuthorizationKeyVar, Bip44Path, IncomingViewingKeyVar, NullifierKey, NullifierKeyVar,
     RandomizedVerificationKey, SeedPhrase, SpendAuthRandomizerVar, SpendKey,
 };
 use penumbra_proof_params::{DummyWitness, VerifyingKeyExt, GROTH16_PROOF_LENGTH_BYTES};
+use penumbra_proto::{penumbra::core::component::shielded_pool::v1 as pb, DomainType};
 use penumbra_shielded_pool::{note::StateCommitment, Rseed};
+use penumbra_tct::r1cs::StateCommitmentVar;
+
+use crate::canonical::CanonicalFqEncoding;
+use crate::encryption::r1cs::{CiphertextVar, PlaintextVar, PublicKeyVar, SharedSecretVar};
+use crate::encryption::{ecies_encrypt, r1cs, Ciphertext};
+use crate::note::{r1cs::NoteVar, Note};
 
 /// The public input for an [`OutputProof`].
 #[derive(Clone, Debug)]
@@ -162,11 +161,8 @@ impl ConstraintSynthesizer<Fq> for OutputCircuit {
         let ak_element_var: AuthorizationKeyVar =
             AuthorizationKeyVar::new_witness(cs.clone(), || Ok(self.private.ak))?;
         let nk_var = NullifierKeyVar::new_witness(cs.clone(), || Ok(self.private.nk))?;
-        let note_fq_var = PlaintextVar::new_witness(cs.clone(), || {
-            Ok(self.private
-                .note
-                .canonical_encoding())
-        })?;
+        let note_fq_var =
+            PlaintextVar::new_witness(cs.clone(), || Ok(self.private.note.canonical_encoding()))?;
         let e_sk_var = UInt8::new_witness_vec(cs.clone(), &self.private.e_sk.to_bytes())?;
 
         // Public inputs
@@ -204,7 +200,7 @@ impl ConstraintSynthesizer<Fq> for OutputCircuit {
                 .creditor
                 .transmission_key()
                 .scalar_mul_le(esk_vars.iter())?,
-            );
+        );
         let computed_note_ciphertext_var = r1cs::ecies_encrypt(&ss_var, &note_fq_var)?;
         computed_note_ciphertext_var.enforce_equal(&note_ciphertext_var)?;
 
