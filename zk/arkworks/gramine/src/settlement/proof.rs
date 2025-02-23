@@ -3,7 +3,7 @@ use std::cmp::Ordering;
 use anyhow::Result;
 use ark_crypto_primitives::crh::poseidon::constraints::CRHParametersVar;
 use ark_crypto_primitives::sponge::poseidon::PoseidonConfig;
-use ark_ff::{ToConstraintField, Zero};
+use ark_ff::Zero;
 use ark_groth16::r1cs_to_qap::LibsnarkReduction;
 use ark_groth16::{Groth16, PreparedVerifyingKey, Proof, ProvingKey};
 use ark_r1cs_std::prelude::*;
@@ -34,6 +34,7 @@ use penumbra_tct::r1cs::StateCommitmentVar;
 use poseidon377::{RATE_1_PARAMS, RATE_2_PARAMS};
 use poseidon_parameters::v1::Matrix;
 
+use crate::canonical::CanonicalFqEncoding;
 use crate::encryption::r1cs::{CiphertextVar, PlaintextVar, PublicKeyVar, SharedSecretVar};
 use crate::encryption::{ecies_encrypt, r1cs, Ciphertext};
 use crate::note::{r1cs::enforce_equal_addresses, r1cs::NoteVar, Note};
@@ -367,7 +368,7 @@ fn check_satisfaction(
     public: &SettlementProofPublic,
     private: &SettlementProofPrivate<MAX_PROOF_INPUT_ARRAY_SIZE>,
 ) -> Result<()> {
-    use crate::encryption::ecies_decrypt;
+    use crate::{canonical::CanonicalFqEncoding, encryption::ecies_decrypt};
     use penumbra_keys::FullViewingKey;
 
     if public.pub_inputs_hash
@@ -514,7 +515,7 @@ fn check_satisfaction(
 
         // Encrypt the output note (after converting it to field elements)
         // and verify that the ciphertext matches the expected value.
-        let note_field_elements = output_note.to_field_elements().unwrap();
+        let note_field_elements = output_note.canonical_encoding();
         let ciphertext = ecies_encrypt(s, note_field_elements)?;
         anyhow::ensure!(ciphertext == *note_ciphertext);
     }
@@ -573,8 +574,7 @@ impl ConstraintSynthesizer<Fq> for SettlementCircuit<MAX_PROOF_INPUT_ARRAY_SIZE>
             .output_notes
             .iter()
             .map(|note| {
-                note.to_field_elements()
-                    .unwrap()
+                note.canonical_encoding()
                     .into_iter()
                     .map(|fq| FqVar::new_witness(cs.clone(), || Ok(fq)).unwrap())
                     .collect::<Vec<FqVar>>()
@@ -898,7 +898,7 @@ pub fn encrypt_note_and_shared_secret(
     let d_c_ss_enc = Encoding(d_c_ss.0)
         .vartime_decompress()
         .map_err(|e| anyhow::anyhow!(e))?;
-    let onote_ct = ecies_encrypt(d_c_ss_enc, onote.to_field_elements().unwrap())
+    let onote_ct = ecies_encrypt(d_c_ss_enc, onote.canonical_encoding())
         .map_err(|e| anyhow::anyhow!(e))?;
 
     // Encrypt the shared secret for the solver.

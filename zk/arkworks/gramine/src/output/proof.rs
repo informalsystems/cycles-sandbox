@@ -16,6 +16,7 @@ use decaf377_ka::{Public, Secret};
 use penumbra_proto::{penumbra::core::component::shielded_pool::v1 as pb, DomainType};
 use penumbra_tct::r1cs::StateCommitmentVar;
 
+use crate::canonical::CanonicalFqEncoding;
 use crate::encryption::r1cs::{CiphertextVar, PlaintextVar, PublicKeyVar, SharedSecretVar};
 use crate::encryption::{ecies_encrypt, r1cs, Ciphertext};
 use crate::note::{r1cs::NoteVar, Note};
@@ -102,7 +103,7 @@ fn check_satisfaction(public: &OutputProofPublic, private: &OutputProofPrivate) 
             .vartime_decompress()
             .map_err(|e| anyhow::anyhow!(e))?
     };
-    let note_field_elements = private.note.to_field_elements().unwrap();
+    let note_field_elements = private.note.canonical_encoding();
     let computed_ciphertext = ecies_encrypt(ss_elem, note_field_elements)?;
     anyhow::ensure!(computed_ciphertext == *public.note_ciphertext);
 
@@ -162,10 +163,9 @@ impl ConstraintSynthesizer<Fq> for OutputCircuit {
             AuthorizationKeyVar::new_witness(cs.clone(), || Ok(self.private.ak))?;
         let nk_var = NullifierKeyVar::new_witness(cs.clone(), || Ok(self.private.nk))?;
         let note_fq_var = PlaintextVar::new_witness(cs.clone(), || {
-            self.private
+            Ok(self.private
                 .note
-                .to_field_elements()
-                .ok_or(SynthesisError::Unsatisfiable)
+                .canonical_encoding())
         })?;
         let e_sk_var = UInt8::new_witness_vec(cs.clone(), &self.private.e_sk.to_bytes())?;
 
@@ -196,15 +196,15 @@ impl ConstraintSynthesizer<Fq> for OutputCircuit {
         let computed_epk_var = note_var
             .creditor
             .diversified_generator()
-            .scalar_mul_le(esk_vars.to_bits_le()?.iter())?;
+            .scalar_mul_le(esk_vars.iter())?;
         computed_epk_var.enforce_equal(&e_pk_var.0)?;
 
         let ss_var = SharedSecretVar(
             note_var
                 .creditor
                 .transmission_key()
-                .scalar_mul_le(esk_vars.to_bits_le()?.iter())?,
-        );
+                .scalar_mul_le(esk_vars.iter())?,
+            );
         let computed_note_ciphertext_var = r1cs::ecies_encrypt(&ss_var, &note_fq_var)?;
         computed_note_ciphertext_var.enforce_equal(&note_ciphertext_var)?;
 
@@ -248,7 +248,7 @@ impl DummyWitness for OutputCircuit {
         let c_pk = address_creditor.transmission_key();
         let d_c_ss = e_sk.key_agreement_with(c_pk).unwrap();
         let d_c_ss_enc = Encoding(d_c_ss.0).vartime_decompress().unwrap();
-        let note_ciphertext = ecies_encrypt(d_c_ss_enc, note.to_field_elements().unwrap()).unwrap();
+        let note_ciphertext = ecies_encrypt(d_c_ss_enc, note.canonical_encoding()).unwrap();
         let e_pk = e_sk.diversified_public(address_creditor.diversified_generator());
 
         let public = OutputProofPublic {
@@ -379,6 +379,7 @@ impl From<OutputProof> for [u8; GROTH16_PROOF_LENGTH_BYTES] {
 mod tests {
     use super::*;
 
+    use crate::canonical::CanonicalFqEncoding;
     use crate::note::{commitment, Note};
 
     use decaf377::Fq;
@@ -445,7 +446,7 @@ mod tests {
             let d_c_ss = e_sk.key_agreement_with(c_pk).unwrap();
             let d_c_ss_enc = Encoding(d_c_ss.0)
                 .vartime_decompress().unwrap();
-            let note_ciphertext = ecies_encrypt(d_c_ss_enc, note.to_field_elements().unwrap()).unwrap();
+            let note_ciphertext = ecies_encrypt(d_c_ss_enc, note.canonical_encoding()).unwrap();
             let e_pk = e_sk.diversified_public(creditor_addr.diversified_generator());
 
             let public = OutputProofPublic { note_commitment, rk: rk_debtor, note_ciphertext, e_pk };
@@ -514,7 +515,7 @@ mod tests {
             let d_c_ss = e_sk.key_agreement_with(c_pk).unwrap();
             let d_c_ss_enc = Encoding(d_c_ss.0)
                 .vartime_decompress().unwrap();
-            let note_ciphertext = ecies_encrypt(d_c_ss_enc, note.to_field_elements().unwrap()).unwrap();
+            let note_ciphertext = ecies_encrypt(d_c_ss_enc, note.canonical_encoding()).unwrap();
             let e_pk = e_sk.diversified_public(creditor_addr.diversified_generator());
 
 
