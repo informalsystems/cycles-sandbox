@@ -898,8 +898,8 @@ pub fn encrypt_note_and_shared_secret(
     let d_c_ss_enc = Encoding(d_c_ss.0)
         .vartime_decompress()
         .map_err(|e| anyhow::anyhow!(e))?;
-    let onote_ct = ecies_encrypt(d_c_ss_enc, onote.canonical_encoding())
-        .map_err(|e| anyhow::anyhow!(e))?;
+    let onote_ct =
+        ecies_encrypt(d_c_ss_enc, onote.canonical_encoding()).map_err(|e| anyhow::anyhow!(e))?;
 
     // Encrypt the shared secret for the solver.
     let e_pk = e_sk.diversified_public(s_addr.diversified_generator());
