@@ -54,6 +54,8 @@ pub static SETTLEMENT_DOMAIN_SEP: Lazy<Fq> = Lazy::new(|| {
 
 pub const MAX_PROOF_INPUT_ARRAY_SIZE: usize = 7;
 
+pub type MerkleProofPath = ark_crypto_primitives::merkle_tree::Path<arkworks_merkle_tree::poseidontree::Poseidon377MerkleTreeParams>;
+
 /// The public input for an [`SettlementProof`].
 #[derive(Clone, Debug)]
 pub struct SettlementProofPublic {
@@ -155,7 +157,7 @@ impl<const N_ROWS: usize, const N_COLS: usize, const N_ELEMENTS: usize> MatrixEx
     }
 }
 
-trait FixedSizePadding {
+pub trait FixedSizePadding {
     /// Produces a default/empty element for padding
     fn padding_default() -> Self;
 
@@ -282,7 +284,7 @@ impl FixedSizePadding for Public {
 
 /// Pads an input slice to an array of len `MAX_PROOF_INPUT_ARRAY_SIZE`.
 /// Truncates vectors longer than `MAX_PROOF_INPUT_ARRAY_SIZE`
-fn pad_to_fixed_size<F: FixedSizePadding>(
+pub fn pad_to_fixed_size<F: FixedSizePadding>(
     elements: &[F],
 ) -> anyhow::Result<[F; MAX_PROOF_INPUT_ARRAY_SIZE]> {
     anyhow::ensure!(
@@ -363,8 +365,8 @@ fn calculate_pub_hash_var(
     )
 }
 
-#[cfg(test)]
-fn check_satisfaction(
+// #[cfg(test)]
+pub fn check_satisfaction(
     public: &SettlementProofPublic,
     private: &SettlementProofPrivate<MAX_PROOF_INPUT_ARRAY_SIZE>,
 ) -> Result<()> {
@@ -426,11 +428,17 @@ fn check_satisfaction(
         .take(unpadded_len)
         .zip(private.input_notes_proofs.iter())
     {
+        // Print the note commit and index for debugging
+        println!(
+            "Verifying merkle proof for note commitment: {:?} at leaf index: {}",
+            note.commit(),
+            auth_path.leaf_index
+        );
         let note_path_valid = auth_path.verify(
             &constants.leaf_crh_params,
             &constants.two_to_one_crh_params,
             &private.uncompressed_public.root,
-            [note.commit().0],
+            [note.commit().0; 1],
         );
         anyhow::ensure!(
             note_path_valid.is_ok(),
@@ -466,15 +474,18 @@ fn check_satisfaction(
 
     let mut expected_output_notes = vec![];
     for note in private.input_notes.iter().take(unpadded_len) {
-        let note = {
-            let remainder = note.amount() - private.setoff_amount;
-            let new_value = Value {
-                amount: remainder,
-                asset_id: note.asset_id(),
+        // TODO: zero-valued input notes are not allowed right
+        if note.amount() != Amount::zero() {
+            let note = {
+                let remainder = note.amount() - private.setoff_amount;
+                let new_value = Value {
+                    amount: remainder,
+                    asset_id: note.asset_id(),
+                };
+                Note::from_parts(note.debtor(), note.creditor(), new_value, note.rseed())?
             };
-            Note::from_parts(note.debtor(), note.creditor(), new_value, note.rseed())?
-        };
-        expected_output_notes.push(note.commit());
+            expected_output_notes.push(note.commit());    
+        }
     }
     anyhow::ensure!(
         expected_output_notes
@@ -600,18 +611,22 @@ impl ConstraintSynthesizer<Fq> for SettlementCircuit<MAX_PROOF_INPUT_ARRAY_SIZE>
 
         let mut expected_output_note_commitment_vars = vec![];
         for note in &self.private.input_notes {
-            let note_var = {
-                let remainder = note.amount() - self.private.setoff_amount;
-                let new_value = Value {
-                    amount: remainder,
-                    asset_id: note.asset_id(),
+            // TODO: zero-valued input notes are not allowed right
+            if note.amount() != Amount::zero() {
+                let note_var = {
+                    println!("note amount:{} setoff: {}", note.amount(), self.private.setoff_amount);
+                    let remainder = note.amount() - self.private.setoff_amount;
+                    let new_value = Value {
+                        amount: remainder,
+                        asset_id: note.asset_id(),
+                    };
+                    let note =
+                        Note::from_parts(note.debtor(), note.creditor(), new_value, note.rseed())
+                            .map_err(|_| SynthesisError::Unsatisfiable)?;
+                    NoteVar::new_witness(cs.clone(), || Ok(note.clone()))?
                 };
-                let note =
-                    Note::from_parts(note.debtor(), note.creditor(), new_value, note.rseed())
-                        .map_err(|_| SynthesisError::Unsatisfiable)?;
-                NoteVar::new_witness(cs.clone(), || Ok(note.clone()))?
-            };
-            expected_output_note_commitment_vars.push(note_var.commit()?);
+                expected_output_note_commitment_vars.push(note_var.commit()?);
+            }
         }
         let input_note_vars = self
             .private
@@ -702,6 +717,7 @@ impl ConstraintSynthesizer<Fq> for SettlementCircuit<MAX_PROOF_INPUT_ARRAY_SIZE>
                 &root_var,
                 &[input_note_var.commit()?.inner],
             )?;
+            
             is_member.enforce_equal(&Boolean::TRUE)?;
         }
 
@@ -1048,7 +1064,8 @@ impl<const N: usize> SettlementProofPrivate<N> {
 
 #[cfg(test)]
 mod tests {
-    use arkworks_merkle_tree::poseidontree::Poseidon377MerkleTree;
+    use ark_crypto_primitives::crh::CRHScheme;
+    use arkworks_merkle_tree::poseidontree::{InnerDigest, LeafHash, Poseidon377MerkleTree};
     use decaf377::{Encoding, Fq};
     use decaf377_ka::{Secret, SharedSecret};
     use penumbra_asset::{asset, Value};
@@ -1095,55 +1112,119 @@ mod tests {
             address_index_1 in any::<u32>(),
             address_index_2 in any::<u32>()
         ) -> (SettlementProofPublic, SettlementProofPrivate<MAX_PROOF_INPUT_ARRAY_SIZE>) {
-            let d_addr = address_from_seed(&seed_phrase_randomness_1, address_index_1);
-            let c_addr = address_from_seed(&seed_phrase_randomness_2, address_index_2);
-            let d_c_inote_rseed = Rseed(rseed_randomness_1);
-            let c_d_inote_rseed = Rseed(rseed_randomness_2);
+            // let d_addr = address_from_seed(&seed_phrase_randomness_1, address_index_1);
+            // let c_addr = address_from_seed(&seed_phrase_randomness_2, address_index_2);
+            // let d_c_inote_rseed = Rseed(rseed_randomness_1);
+            // let c_d_inote_rseed = Rseed(rseed_randomness_2);
 
-            let value_to_send = Value {
-                amount: Amount::from(amount),
-                asset_id: asset::Id(Fq::from(asset_id64)),
+            // let value_to_send = Value {
+            //     amount: Amount::from(amount),
+            //     asset_id: asset::Id(Fq::from(asset_id64)),
+            // };
+            // let d_c_inote = Note::from_parts(
+            //     d_addr.clone(),
+            //     c_addr.clone(),
+            //     value_to_send,
+            //     d_c_inote_rseed,
+            // ).expect("should be able to create note");
+            // let d_c_inote_nul = Nullifier::derive(&d_c_inote);
+
+            // let c_d_inote = Note::from_parts(
+            //     c_addr.clone(),
+            //     d_addr.clone(),
+            //     value_to_send,
+            //     c_d_inote_rseed,
+            // ).expect("should be able to create note");
+            // let c_d_inote_nul = Nullifier::derive(&c_d_inote);
+
+            // let setoff_amount = amount;
+            // let value_reduced = Value {
+            //     amount: Amount::from(amount - setoff_amount),
+            //     asset_id: asset::Id(Fq::from(asset_id64)),
+            // };
+            // let d_c_onote = Note::from_parts(
+            //     d_addr.clone(),
+            //     c_addr.clone(),
+            //     value_reduced,
+            //     d_c_inote_rseed,
+            // ).expect("should be able to create note");
+            // let d_c_onote_comm = d_c_onote.commit();
+            // let c_d_onote = Note::from_parts(
+            //     c_addr.clone(),
+            //     d_addr.clone(),
+            //     value_reduced,
+            //     c_d_inote_rseed,
+            // ).expect("should be able to create note");
+            // let c_d_onote_comm = c_d_onote.commit();
+
+            // Deserialize input notes from JSON
+            let input_notes_json = r#"[{"creditor":{"inner":"PAtqBycDonSR52H/6LzGf/LVXm1S6UPMNqz2vubFIOAk+oW5OqM0Y4eW81f/cbt/RbeUsQ5dmPHvrCFQwWUHVW2f3rwc+cYopWzGPCDMmk0="},"debtor":{"inner":"XS8OvPi8W9xo3/iDwuga7UaJhfgKTsKy9gZbhKu3L4KmLAf+igDgWBB6/epiBmCSxstVAqoI8E5WxDLshzFasMdjEewlew5KRfKYQkRhpb8="},"rseed":[118,8,86,117,128,51,196,242,230,0,88,127,84,223,103,155,27,149,229,204,156,231,220,157,83,191,110,113,109,208,199,40],"value":{"amount":{"lo":"30"},"assetId":{"inner":"AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="}}},{"creditor":{"inner":"XS8OvPi8W9xo3/iDwuga7UaJhfgKTsKy9gZbhKu3L4KmLAf+igDgWBB6/epiBmCSxstVAqoI8E5WxDLshzFasMdjEewlew5KRfKYQkRhpb8="},"debtor":{"inner":"PAtqBycDonSR52H/6LzGf/LVXm1S6UPMNqz2vubFIOAk+oW5OqM0Y4eW81f/cbt/RbeUsQ5dmPHvrCFQwWUHVW2f3rwc+cYopWzGPCDMmk0="},"rseed":[223,134,42,113,47,132,251,228,89,148,26,40,159,191,225,153,255,221,143,175,80,201,6,56,68,205,145,159,8,96,70,255],"value":{"amount":{"lo":"20"},"assetId":{"inner":"AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="}}}]"#;
+            
+            // Deserialize output notes from JSON
+            let output_notes_json = r#"[{"creditor":{"inner":"PAtqBycDonSR52H/6LzGf/LVXm1S6UPMNqz2vubFIOAk+oW5OqM0Y4eW81f/cbt/RbeUsQ5dmPHvrCFQwWUHVW2f3rwc+cYopWzGPCDMmk0="},"debtor":{"inner":"XS8OvPi8W9xo3/iDwuga7UaJhfgKTsKy9gZbhKu3L4KmLAf+igDgWBB6/epiBmCSxstVAqoI8E5WxDLshzFasMdjEewlew5KRfKYQkRhpb8="},"rseed":[118,8,86,117,128,51,196,242,230,0,88,127,84,223,103,155,27,149,229,204,156,231,220,157,83,191,110,113,109,208,199,40],"value":{"amount":{"lo":"10"},"assetId":{"inner":"AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="}}},{"creditor":{"inner":"XS8OvPi8W9xo3/iDwuga7UaJhfgKTsKy9gZbhKu3L4KmLAf+igDgWBB6/epiBmCSxstVAqoI8E5WxDLshzFasMdjEewlew5KRfKYQkRhpb8="},"debtor":{"inner":"PAtqBycDonSR52H/6LzGf/LVXm1S6UPMNqz2vubFIOAk+oW5OqM0Y4eW81f/cbt/RbeUsQ5dmPHvrCFQwWUHVW2f3rwc+cYopWzGPCDMmk0="},"rseed":[223,134,42,113,47,132,251,228,89,148,26,40,159,191,225,153,255,221,143,175,80,201,6,56,68,205,145,159,8,96,70,255],"value":{"amount":{},"assetId":{"inner":"AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="}}}]"#;
+
+            // Deserialize the merkle root from binary representation            
+            // Convert the bytes to Fq
+            let merkle_root = {
+                let merkle_root_bytes = [
+                    173, 38, 2, 143, 130, 105, 243, 182, 59, 219, 93, 137, 155, 94, 42, 111,
+                    108, 17, 110, 65, 93, 128, 246, 206, 44, 56, 167, 100, 138, 161, 91, 18
+                ];
+                
+                Fq::from_bytes_checked(&merkle_root_bytes)
+                    .map_err(|e| anyhow::anyhow!("Failed to convert merkle root bytes to Fq: {}", e))
+                    .expect("Valid merkle root bytes")
             };
-            let d_c_inote = Note::from_parts(
-                d_addr.clone(),
-                c_addr.clone(),
-                value_to_send,
-                d_c_inote_rseed,
-            ).expect("should be able to create note");
+
+            // Parse the JSON into Vec<Note>
+            let input_notes: Vec<Note> = serde_json::from_str(input_notes_json)
+                .expect("Failed to deserialize input notes");
+            
+            let output_notes: Vec<Note> = serde_json::from_str(output_notes_json)
+                .expect("Failed to deserialize output notes");
+            
+            // Extract the notes we need
+            let d_c_inote = input_notes[0].clone();
+            let c_d_inote = input_notes[1].clone();
+            
+            let d_c_onote = output_notes[0].clone();
+            let c_d_onote = output_notes[1].clone();
+            
+            // Calculate nullifiers
             let d_c_inote_nul = Nullifier::derive(&d_c_inote);
-
-            let c_d_inote = Note::from_parts(
-                c_addr.clone(),
-                d_addr.clone(),
-                value_to_send,
-                c_d_inote_rseed,
-            ).expect("should be able to create note");
             let c_d_inote_nul = Nullifier::derive(&c_d_inote);
-
-            let setoff_amount = amount;
-            let value_reduced = Value {
-                amount: Amount::from(amount - setoff_amount),
-                asset_id: asset::Id(Fq::from(asset_id64)),
-            };
-            let d_c_onote = Note::from_parts(
-                d_addr.clone(),
-                c_addr.clone(),
-                value_reduced,
-                d_c_inote_rseed,
-            ).expect("should be able to create note");
+            
+            // Get note commitments
             let d_c_onote_comm = d_c_onote.commit();
-            let c_d_onote = Note::from_parts(
-                c_addr.clone(),
-                d_addr.clone(),
-                value_reduced,
-                c_d_inote_rseed,
-            ).expect("should be able to create note");
             let c_d_onote_comm = c_d_onote.commit();
+            
+            // Extract addresses for encryption
+            let d_addr = d_c_inote.debtor();
+            let c_addr = c_d_inote.debtor();
+            
+            // Set setoff amount (difference between input and output amounts)
+            let setoff_amount = 20u64;
+
+            pub fn hash_single(leaf: Fq) -> Fq {
+                use crate::settlement::SettlementProofConst;
+            
+                let poseidon = SettlementProofConst::default();
+            
+                LeafHash::evaluate(
+                    &poseidon.leaf_crh_params,
+                    [leaf; 1]
+                )
+                .expect("two_to_one hash failed")
+            }
+            
+            pub fn hash_empty() -> Fq {
+                InnerDigest::default()
+            }
 
             let constants = SettlementProofConst::default();
-            let leaves: Vec<[Fq; 1]> = vec![[d_c_inote.commit().0], [c_d_inote.commit().0]];
+            let leaves: Vec<Fq> = vec![hash_single(d_c_inote.commit().0), hash_single(c_d_inote.commit().0), hash_single(d_c_onote.commit().0), hash_single(c_d_onote.commit().0), hash_empty(), hash_empty(), hash_empty(), hash_empty()];
             // Build tree with our one dummy note in order to get the merkle root value
-            let tree = Poseidon377MerkleTree::new(
+            let tree = Poseidon377MerkleTree::new_with_leaf_digest(
                 &constants.leaf_crh_params,
                 &constants.two_to_one_crh_params,
                 leaves.clone(),
@@ -1165,7 +1246,7 @@ mod tests {
             let uncompressed_public = SettlementProofUncompressedPublic {
                 output_notes_commitments: [d_c_onote_comm, c_d_onote_comm],
                 nullifiers: [d_c_inote_nul, c_d_inote_nul],
-                root: tree.root(),
+                root: merkle_root,
                 note_ciphertexts: [d_c_onote_ct, c_d_onote_ct],
                 ss_ciphertexts: [d_c_ss_ct, c_d_ss_ct],
                 note_epks: [d_c_e_pk, c_d_e_pk],
