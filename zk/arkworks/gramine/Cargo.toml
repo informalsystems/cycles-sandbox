@@ -10,7 +10,7 @@ path = "src/main.rs"
 [dependencies]
 anyhow                           = { version = "1.0.94", default-features = false }
 ark-crypto-primitives            = { version = "0.4.0", default-features = false, features = ["encryption", "merkle_tree", "r1cs"] }
-arkworks-merkle-tree             = { git = "https://github.com/hu55a1n1/arkworks-merkle-tree.git", branch = "dangush/poseiden" }
+arkworks-merkle-tree             = { git = "https://github.com/hu55a1n1/arkworks-merkle-tree.git"}
 ark-ff                           = { version = "0.4.0", default-features = false }
 ark-groth16                      = { version = "0.4.0", default-features = false }
 ark-serialize                    = { version = "0.4.0", default-features = false, features = ["derive"] }
