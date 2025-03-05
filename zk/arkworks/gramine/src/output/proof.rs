@@ -1,32 +1,31 @@
-use base64::prelude::*;
 use std::str::FromStr;
 
 use anyhow::Result;
-use ark_groth16::r1cs_to_qap::LibsnarkReduction;
-use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
-use decaf377::{Bls12_377, Encoding, Fq, Fr};
-use decaf377_rdsa::{SpendAuth, VerificationKey};
-
 use ark_ff::ToConstraintField;
+use ark_groth16::r1cs_to_qap::LibsnarkReduction;
 use ark_groth16::{Groth16, PreparedVerifyingKey, Proof, ProvingKey};
 use ark_r1cs_std::prelude::*;
-use ark_relations::r1cs::{ConstraintSynthesizer, ConstraintSystemRef, SynthesisError};
+use ark_relations::r1cs::{ConstraintSynthesizer, ConstraintSystemRef};
+use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_snark::SNARK;
+use base64::prelude::*;
+use decaf377::{Bls12_377, Encoding, Fq, Fr};
 use decaf377_ka::{Public, Secret};
-use penumbra_proto::{penumbra::core::component::shielded_pool::v1 as pb, DomainType};
-use penumbra_tct::r1cs::StateCommitmentVar;
-
-use crate::canonical::CanonicalFqEncoding;
-use crate::encryption::r1cs::{CiphertextVar, PlaintextVar, PublicKeyVar, SharedSecretVar};
-use crate::encryption::{ecies_encrypt, r1cs, Ciphertext};
-use crate::note::{r1cs::NoteVar, Note};
+use decaf377_rdsa::{SpendAuth, VerificationKey};
 use penumbra_asset::Value;
 use penumbra_keys::keys::{
     AuthorizationKeyVar, Bip44Path, IncomingViewingKeyVar, NullifierKey, NullifierKeyVar,
     RandomizedVerificationKey, SeedPhrase, SpendAuthRandomizerVar, SpendKey,
 };
 use penumbra_proof_params::{DummyWitness, VerifyingKeyExt, GROTH16_PROOF_LENGTH_BYTES};
+use penumbra_proto::{penumbra::core::component::shielded_pool::v1 as pb, DomainType};
 use penumbra_shielded_pool::{note::StateCommitment, Rseed};
+use penumbra_tct::r1cs::StateCommitmentVar;
+
+use crate::canonical::CanonicalFqEncoding;
+use crate::encryption::r1cs::{CiphertextVar, PlaintextVar, PublicKeyVar, SharedSecretVar};
+use crate::encryption::{ecies_encrypt, r1cs, Ciphertext};
+use crate::note::{r1cs::NoteVar, Note};
 
 /// The public input for an [`OutputProof`].
 #[derive(Clone, Debug)]
@@ -299,29 +298,39 @@ impl OutputProof {
     pub fn verify(
         &self,
         vk: &PreparedVerifyingKey<Bls12_377>,
-        public: OutputProofPublic,
+        OutputProofPublic {
+            note_commitment,
+            rk,
+            note_ciphertext,
+            e_pk,
+        }: OutputProofPublic,
     ) -> anyhow::Result<()> {
+        let note_commitment_fqs = note_commitment
+            .0
+            .to_field_elements()
+            .ok_or_else(|| anyhow::anyhow!("note commitment is not a valid field element"))?;
+        let rk_fqs = Encoding(rk.to_bytes())
+            .vartime_decompress()
+            .map_err(|_| anyhow::anyhow!("could not decompress element points"))?
+            .vartime_compress_to_field();
+        let note_ciphertext_fqs = note_ciphertext.to_field_elements().ok_or_else(|| {
+            anyhow::anyhow!("note ciphertext is not composed of only field element")
+        })?;
+        let e_pk_fqs = Encoding(e_pk.0)
+            .vartime_decompress()
+            .map_err(|_| anyhow::anyhow!("could not decompress element points"))?
+            .vartime_compress_to_field();
+
+        let mut public_inputs = Vec::new();
+        public_inputs.extend(note_commitment_fqs);
+        public_inputs.extend([rk_fqs]);
+        public_inputs.extend(note_ciphertext_fqs);
+        public_inputs.extend([e_pk_fqs]);
+        tracing::trace!(?public_inputs);
+
         let proof =
             Proof::deserialize_compressed_unchecked(&self.0[..]).map_err(|e| anyhow::anyhow!(e))?;
 
-        let mut public_inputs = Vec::new();
-        public_inputs.extend(
-            public
-                .note_commitment
-                .0
-                .to_field_elements()
-                .ok_or_else(|| anyhow::anyhow!("note commitment is not a valid field element"))?,
-        );
-        let element_rk = decaf377::Encoding(public.rk.to_bytes())
-            .vartime_decompress()
-            .map_err(|_| anyhow::anyhow!("could not decompress element points"))?;
-        public_inputs.extend(
-            element_rk
-                .to_field_elements()
-                .ok_or_else(|| anyhow::anyhow!("rk is not a valid field element"))?,
-        );
-
-        tracing::trace!(?public_inputs);
         let start = std::time::Instant::now();
         let proof_result = Groth16::<Bls12_377, LibsnarkReduction>::verify_with_processed_vk(
             vk,
@@ -364,17 +373,18 @@ impl From<OutputProof> for [u8; GROTH16_PROOF_LENGTH_BYTES] {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
-    use crate::canonical::CanonicalFqEncoding;
-    use crate::note::{commitment, Note};
-
+    use ark_groth16::VerifyingKey;
     use decaf377::Fq;
     use penumbra_asset::{asset, Value};
     use penumbra_keys::keys::{Bip44Path, SeedPhrase, SpendKey};
     use penumbra_keys::Address;
     use penumbra_num::Amount;
     use proptest::prelude::*;
+    use rand_core::OsRng;
+
+    use super::*;
+    use crate::canonical::CanonicalFqEncoding;
+    use crate::note::{commitment, Note};
 
     fn fq_strategy() -> BoxedStrategy<Fq> {
         any::<[u8; 32]>()
@@ -520,5 +530,84 @@ mod tests {
             assert!(check_satisfaction(&public, &private).is_err());
             assert!(check_circuit_satisfaction(public, private).is_err());
         }
+    }
+
+    #[test]
+    fn test_prove_verify() {
+        const TEST_ASSET_ID: u64 = 1;
+
+        let mut rng = rand::thread_rng();
+        let seed_phrase_randomness_1: [u8; 32] = rng.gen();
+        let seed_phrase_randomness_2: [u8; 32] = rng.gen();
+        let rseed_randomness_1: [u8; 32] = rng.gen();
+
+        // create keys
+        let sk_debtor = sk_from_seed(&seed_phrase_randomness_1);
+        let debtor_addr = addr_from_sk(&sk_debtor, 123);
+        let spend_auth_randomizer_debtor = Fr::from(123u64);
+        let rsk_debtor = sk_debtor
+            .spend_auth_key()
+            .randomize(&spend_auth_randomizer_debtor);
+        let rk_debtor: VerificationKey<SpendAuth> = rsk_debtor.into();
+        let ak_debtor = sk_debtor.spend_auth_key().into();
+        let nk_debtor = *sk_debtor.nullifier_key();
+
+        let sk_creditor = sk_from_seed(&seed_phrase_randomness_2);
+        let creditor_addr = addr_from_sk(&sk_creditor, 131);
+
+        // create obligations with proofs and send them to the chain
+        let value_1 = Value {
+            amount: Amount::from(30u64),
+            asset_id: asset::Id(Fq::from(TEST_ASSET_ID)),
+        };
+        let note = Note::from_parts(
+            debtor_addr.clone(),
+            creditor_addr.clone(),
+            value_1,
+            Rseed(rseed_randomness_1),
+        )
+        .expect("should be able to create note");
+
+        let note_commitment = note.commit();
+
+        let e_sk = note.rseed().derive_esk();
+        let ss = e_sk
+            .key_agreement_with(note.creditor().transmission_key())
+            .unwrap();
+        let s_elem = Encoding(ss.0)
+            .vartime_decompress()
+            .expect("decompression should succeed");
+
+        let note_fqs = note.canonical_encoding();
+        let note_ciphertext = ecies_encrypt(s_elem, note_fqs).unwrap();
+
+        let public = OutputProofPublic {
+            note_commitment: StateCommitment(note_commitment.0),
+            rk: rk_debtor,
+            note_ciphertext,
+            e_pk: e_sk.diversified_public(note.creditor().diversified_generator()),
+        };
+        let private = OutputProofPrivate {
+            note,
+            spend_auth_randomizer: spend_auth_randomizer_debtor,
+            ak: ak_debtor,
+            nk: nk_debtor,
+            e_sk,
+        };
+
+        let blinding_r = Fq::rand(&mut OsRng);
+        let blinding_s = Fq::rand(&mut OsRng);
+        let pk = ProvingKey::deserialize_uncompressed_unchecked(
+            include_bytes!("../../gen/output_pk.bin").as_slice(),
+        )
+        .unwrap();
+        let proof = OutputProof::prove(blinding_r, blinding_s, &pk, public.clone(), private)
+            .expect("can create proof");
+
+        let vk = VerifyingKey::deserialize_uncompressed_unchecked(
+            include_bytes!("../../gen/output_vk.param").as_slice(),
+        )
+        .unwrap();
+        proof.verify(&vk.into(), public).unwrap()
     }
 }
