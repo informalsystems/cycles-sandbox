@@ -632,38 +632,38 @@ impl ConstraintSynthesizer<Fq> for SettlementCircuit<MAX_PROOF_INPUT_ARRAY_SIZE>
             .private
             .input_notes
             .map(|note| NoteVar::new_witness(cs.clone(), || Ok(note.clone())).unwrap());
-
-        // Public inputs
         let output_note_commitment_vars = self
             .private
             .uncompressed_public
             .output_notes_commitments
             .map(|commitment| {
-                StateCommitmentVar::new_input(cs.clone(), || Ok(commitment)).unwrap()
+                StateCommitmentVar::new_witness(cs.clone(), || Ok(commitment)).unwrap()
             });
         let nullifier_vars = self
             .private
             .uncompressed_public
             .nullifiers
-            .map(|nullifier| NullifierVar::new_input(cs.clone(), || Ok(nullifier)).unwrap());
+            .map(|nullifier| NullifierVar::new_witness(cs.clone(), || Ok(nullifier)).unwrap());
         let root_var =
-            RootVar::new_input(cs.clone(), || Ok(self.private.uncompressed_public.root))?;
-        let pub_inputs_hash_var = FqVar::new_input(cs.clone(), || Ok(self.public.pub_inputs_hash))?;
+            RootVar::new_witness(cs.clone(), || Ok(self.private.uncompressed_public.root))?;
         let note_ciphertext_vars = self
             .private
             .uncompressed_public
             .note_ciphertexts
-            .map(|ss_ct| CiphertextVar::new_input(cs.clone(), || Ok(ss_ct.clone())).unwrap());
+            .map(|ss_ct| CiphertextVar::new_witness(cs.clone(), || Ok(ss_ct.clone())).unwrap());
         let ss_ciphertext_vars = self
             .private
             .uncompressed_public
             .ss_ciphertexts
-            .map(|ss_ct| CiphertextVar::new_input(cs.clone(), || Ok(ss_ct.clone())).unwrap());
+            .map(|ss_ct| CiphertextVar::new_witness(cs.clone(), || Ok(ss_ct.clone())).unwrap());
         let note_epk_vars = self
             .private
             .uncompressed_public
             .note_epks
-            .map(|epk| PublicKeyVar::new_input(cs.clone(), || Ok(epk)).unwrap());
+            .map(|epk| PublicKeyVar::new_witness(cs.clone(), || Ok(epk)).unwrap());
+
+        // Public inputs
+        let pub_inputs_hash_var = FqVar::new_input(cs.clone(), || Ok(self.public.pub_inputs_hash))?;
 
         // Constants
         let constants = SettlementProofConst::default();
