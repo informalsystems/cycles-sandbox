@@ -3,7 +3,7 @@ use ark_relations::r1cs::SynthesisError;
 use decaf377::{r1cs::FqVar, Fq};
 use once_cell::sync::Lazy;
 use penumbra_proto::{core::component::sct::v1 as pb, DomainType};
-use poseidon377::hash_6;
+use poseidon377::hash_2;
 use serde::{Deserialize, Serialize};
 
 use crate::note::{r1cs::NoteVar, Note};
@@ -65,16 +65,9 @@ impl Nullifier {
     /// Derive the [`Nullifier`] for a positioned note or swap given its [`merkle::Position`]
     /// and [`Commitment`].
     pub fn derive(note: &Note) -> Nullifier {
-        Nullifier(hash_6(
+        Nullifier(hash_2(
             &NULLIFIER_DOMAIN_SEP,
-            (
-                note.note_blinding(),
-                note.value().amount.into(),
-                note.value().asset_id.0,
-                note.diversified_generator().vartime_compress_to_field(),
-                note.transmission_key_s(),
-                Fq::from_le_bytes_mod_order(&note.clue_key().0[..]),
-            ),
+            (note.note_blinding(), note.commit().0),
         ))
     }
 }
@@ -148,19 +141,11 @@ impl NullifierVar {
     pub fn derive(note: &NoteVar) -> Result<NullifierVar, SynthesisError> {
         let cs = note.amount().cs();
         let domain_sep = FqVar::new_constant(cs.clone(), *NULLIFIER_DOMAIN_SEP)?;
-        let compressed_g_d = note.debtor.diversified_generator().compress_to_field()?;
 
-        let nullifier = poseidon377::r1cs::hash_6(
+        let nullifier = poseidon377::r1cs::hash_2(
             cs,
             &domain_sep,
-            (
-                note.note_blinding.clone(),
-                note.value.amount(),
-                note.value.asset_id(),
-                compressed_g_d,
-                note.debtor.transmission_key().compress_to_field()?,
-                note.debtor.clue_key(),
-            ),
+            (note.note_blinding.clone(), note.commit()?.inner),
         )?;
 
         Ok(NullifierVar { inner: nullifier })
