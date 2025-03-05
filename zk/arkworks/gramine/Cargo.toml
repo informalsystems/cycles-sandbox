@@ -6,9 +6,10 @@ edition = "2021"
 [[bin]]
 name = "paramgen"
 path = "src/main.rs"
-required-features = ["parallel"]
+required-features = ["paramgen-setup"]
 
 [features]
+paramgen-setup = ["penumbra-proof-setup"]
 parallel = [
     "ark-crypto-primitives/parallel",
     "ark-ff/parallel",
@@ -21,7 +22,7 @@ parallel = [
     "penumbra-keys/parallel",
     "penumbra-num/parallel",
     "penumbra-proof-params/parallel",
-    "penumbra-proof-setup",
+    "paramgen-setup",
     "penumbra-shielded-pool/parallel",
     "penumbra-tct/parallel",
     "poseidon377/parallel",
