@@ -6,6 +6,26 @@ edition = "2021"
 [[bin]]
 name = "paramgen"
 path = "src/main.rs"
+required-features = ["parallel"]
+
+[features]
+parallel = [
+    "ark-crypto-primitives/parallel",
+    "ark-ff/parallel",
+    "ark-groth16/parallel",
+    "ark-r1cs-std/parallel",
+    "ark-std/parallel",
+    "decaf377/parallel",
+    "decaf377-rdsa/parallel",
+    "penumbra-asset/parallel",
+    "penumbra-keys/parallel",
+    "penumbra-num/parallel",
+    "penumbra-proof-params/parallel",
+    "penumbra-proof-setup/parallel",
+    "penumbra-shielded-pool/parallel",
+    "penumbra-tct/parallel",
+    "poseidon377/parallel",
+]
 
 [dependencies]
 anyhow                           = { version = "1.0.94", default-features = false }
