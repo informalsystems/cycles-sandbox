@@ -1,3 +1,5 @@
 mod proof;
 
-pub use proof::{OutputCircuit, OutputProof, OutputProofPrivate, OutputProofPublic, check_satisfaction};
+pub use proof::{
+    check_satisfaction, OutputCircuit, OutputProof, OutputProofPrivate, OutputProofPublic,
+};

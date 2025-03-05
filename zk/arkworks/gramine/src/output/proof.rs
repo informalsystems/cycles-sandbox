@@ -162,11 +162,8 @@ impl ConstraintSynthesizer<Fq> for OutputCircuit {
         let ak_element_var: AuthorizationKeyVar =
             AuthorizationKeyVar::new_witness(cs.clone(), || Ok(self.private.ak))?;
         let nk_var = NullifierKeyVar::new_witness(cs.clone(), || Ok(self.private.nk))?;
-        let note_fq_var = PlaintextVar::new_witness(cs.clone(), || {
-            Ok(self.private
-                .note
-                .canonical_encoding())
-        })?;
+        let note_fq_var =
+            PlaintextVar::new_witness(cs.clone(), || Ok(self.private.note.canonical_encoding()))?;
         let e_sk_var = UInt8::new_witness_vec(cs.clone(), &self.private.e_sk.to_bytes())?;
 
         // Public inputs
@@ -204,7 +201,7 @@ impl ConstraintSynthesizer<Fq> for OutputCircuit {
                 .creditor
                 .transmission_key()
                 .scalar_mul_le(esk_vars.iter())?,
-            );
+        );
         let computed_note_ciphertext_var = r1cs::ecies_encrypt(&ss_var, &note_fq_var)?;
         computed_note_ciphertext_var.enforce_equal(&note_ciphertext_var)?;
 

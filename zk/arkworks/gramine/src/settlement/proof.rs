@@ -54,7 +54,9 @@ pub static SETTLEMENT_DOMAIN_SEP: Lazy<Fq> = Lazy::new(|| {
 
 pub const MAX_PROOF_INPUT_ARRAY_SIZE: usize = 7;
 
-pub type MerkleProofPath = ark_crypto_primitives::merkle_tree::Path<arkworks_merkle_tree::poseidontree::Poseidon377MerkleTreeParams>;
+pub type MerkleProofPath = ark_crypto_primitives::merkle_tree::Path<
+    arkworks_merkle_tree::poseidontree::Poseidon377MerkleTreeParams,
+>;
 
 /// The public input for an [`SettlementProof`].
 #[derive(Clone, Debug)]
@@ -484,7 +486,7 @@ pub fn check_satisfaction(
                 };
                 Note::from_parts(note.debtor(), note.creditor(), new_value, note.rseed())?
             };
-            expected_output_notes.push(note.commit());    
+            expected_output_notes.push(note.commit());
         }
     }
     anyhow::ensure!(
@@ -614,7 +616,11 @@ impl ConstraintSynthesizer<Fq> for SettlementCircuit<MAX_PROOF_INPUT_ARRAY_SIZE>
             // TODO: zero-valued input notes are not allowed right
             if note.amount() != Amount::zero() {
                 let note_var = {
-                    println!("note amount:{} setoff: {}", note.amount(), self.private.setoff_amount);
+                    println!(
+                        "note amount:{} setoff: {}",
+                        note.amount(),
+                        self.private.setoff_amount
+                    );
                     let remainder = note.amount() - self.private.setoff_amount;
                     let new_value = Value {
                         amount: remainder,
@@ -717,7 +723,7 @@ impl ConstraintSynthesizer<Fq> for SettlementCircuit<MAX_PROOF_INPUT_ARRAY_SIZE>
                 &root_var,
                 &[input_note_var.commit()?.inner],
             )?;
-            
+
             is_member.enforce_equal(&Boolean::TRUE)?;
         }
 
@@ -914,8 +920,8 @@ pub fn encrypt_note_and_shared_secret(
     let d_c_ss_enc = Encoding(d_c_ss.0)
         .vartime_decompress()
         .map_err(|e| anyhow::anyhow!(e))?;
-    let onote_ct = ecies_encrypt(d_c_ss_enc, onote.canonical_encoding())
-        .map_err(|e| anyhow::anyhow!(e))?;
+    let onote_ct =
+        ecies_encrypt(d_c_ss_enc, onote.canonical_encoding()).map_err(|e| anyhow::anyhow!(e))?;
 
     // Encrypt the shared secret for the solver.
     let e_pk = e_sk.diversified_public(s_addr.diversified_generator());
