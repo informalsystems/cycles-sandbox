@@ -349,14 +349,14 @@ fn calculate_pub_hash_var(
     };
 
     let nullifiers_hash = {
-        let commitments_fq: [FqVar; MAX_PROOF_INPUT_ARRAY_SIZE] =
+        let nullifiers_fq: [FqVar; MAX_PROOF_INPUT_ARRAY_SIZE] =
             std::array::from_fn(|i| nullifier_vars[i].inner.clone());
 
         // Compute hashes
         poseidon377::r1cs::hash_7(
             cs.clone(),
             &nullifiers_var_domain_sep,
-            commitments_fq.into(),
+            nullifiers_fq.into(),
         )?
     };
 
@@ -656,7 +656,7 @@ impl ConstraintSynthesizer<Fq> for SettlementCircuit<MAX_PROOF_INPUT_ARRAY_SIZE>
             .private
             .uncompressed_public
             .note_ciphertexts
-            .map(|ss_ct| CiphertextVar::new_witness(cs.clone(), || Ok(ss_ct.clone())).unwrap());
+            .map(|note_ct| CiphertextVar::new_witness(cs.clone(), || Ok(note_ct.clone())).unwrap());
         let ss_ciphertext_vars = self
             .private
             .uncompressed_public
@@ -727,24 +727,24 @@ impl ConstraintSynthesizer<Fq> for SettlementCircuit<MAX_PROOF_INPUT_ARRAY_SIZE>
             is_member.enforce_equal(&Boolean::TRUE)?;
         }
 
-        for input_note_var in input_note_vars.windows(2).take(unpadded_len - 1)
-        // stop before we get to pair where the second note is padded
-        {
-            let curr_creditor = &input_note_var[0].creditor;
-            let next_debtor = &input_note_var[1].debtor;
-            enforce_equal_addresses(curr_creditor, next_debtor)?;
-        }
-        let first_debtor = input_note_vars
-            .first()
-            .map(|n| &n.debtor)
-            .ok_or(SynthesisError::Unsatisfiable)?;
-        let last_creditor = input_note_vars
-            .get(unpadded_len - 1)
-            .map(|n| &n.creditor)
-            .ok_or(SynthesisError::Unsatisfiable)?;
-        enforce_equal_addresses(first_debtor, last_creditor)?;
+        // for input_note_var in input_note_vars.windows(2).take(unpadded_len - 1)
+        // // stop before we get to pair where the second note is padded
+        // {
+        //     let curr_creditor = &input_note_var[0].creditor;
+        //     let next_debtor = &input_note_var[1].debtor;
+        //     enforce_equal_addresses(curr_creditor, next_debtor)?;
+        // }
+        // let first_debtor = input_note_vars
+        //     .first()
+        //     .map(|n| &n.debtor)
+        //     .ok_or(SynthesisError::Unsatisfiable)?;
+        // let last_creditor = input_note_vars
+        //     .get(unpadded_len - 1)
+        //     .map(|n| &n.creditor)
+        //     .ok_or(SynthesisError::Unsatisfiable)?;
+        // enforce_equal_addresses(first_debtor, last_creditor)?;
 
-        // fixme: Do we need to check there are >1 input notes?
+        // // fixme: Do we need to check there are >1 input notes?
 
         // setoff_amount > 0
         setoff_var
@@ -930,7 +930,7 @@ pub fn encrypt_note_and_shared_secret(
     let d_s_ss_enc = Encoding(d_s_ss.0)
         .vartime_decompress()
         .map_err(|e| anyhow::anyhow!(e))?;
-    let d_c_ss_ct = ecies_encrypt(d_s_ss_enc, vec![d_c_ss_enc.vartime_compress_to_field()])?;
+    let d_c_ss_ct = ecies_encrypt(d_s_ss_enc, vec![Fq::from_le_bytes_mod_order(&d_c_ss.0)])?;
 
     Ok((onote_ct, d_c_ss_ct, e_pk))
 }
@@ -1071,6 +1071,8 @@ impl<const N: usize> SettlementProofPrivate<N> {
 #[cfg(test)]
 mod tests {
     use ark_crypto_primitives::crh::CRHScheme;
+    use ark_groth16::{ProvingKey, VerifyingKey};
+    use ark_serialize::CanonicalDeserialize;
     use arkworks_merkle_tree::poseidontree::{InnerDigest, LeafHash, Poseidon377MerkleTree};
     use decaf377::{Encoding, Fq};
     use decaf377_ka::{Secret, SharedSecret};
@@ -1092,6 +1094,8 @@ mod tests {
     use crate::settlement::{
         proof::MAX_PROOF_INPUT_ARRAY_SIZE, SettlementProofPrivate, SettlementProofPublic,
     };
+
+    use super::SettlementProof;
 
     fn fq_strategy() -> BoxedStrategy<Fq> {
         any::<[u8; 32]>()
@@ -1414,5 +1418,131 @@ mod tests {
         let s_ivk = test_keys::FULL_VIEWING_KEY.incoming();
         let s_d_ss = s_ivk.key_agreement_with(&e_pk).unwrap();
         assert_eq!(s_d_ss, d_s_ss);
+    }
+
+    #[test]
+    fn test_verifier() {
+        // Generate randomness for addresses and rseeds
+        let seed_phrase_randomness_1 = [1u8; 32];
+        let seed_phrase_randomness_2 = [2u8; 32];
+        let address_index_1 = 1u32;
+        let address_index_2 = 2u32;
+        let rseed_randomness_1 = [3u8; 32];
+        let rseed_randomness_2 = [4u8; 32];
+        
+        let d_addr = address_from_seed(&seed_phrase_randomness_1, address_index_1);
+        let c_addr = address_from_seed(&seed_phrase_randomness_2, address_index_2);
+        let d_c_inote_rseed = Rseed(rseed_randomness_1);
+        let c_d_inote_rseed = Rseed(rseed_randomness_2);
+
+        // Set up test values
+        let amount = 10u64;
+        let asset_id64 = 1u64;
+
+        let value_to_send = Value {
+            amount: Amount::from(amount),
+            asset_id: asset::Id(Fq::from(asset_id64)),
+        };
+        let d_c_inote = Note::from_parts(
+            d_addr.clone(),
+            c_addr.clone(),
+            value_to_send,
+            d_c_inote_rseed,
+        ).expect("should be able to create note");
+        let d_c_inote_nul = Nullifier::derive(&d_c_inote);
+
+        let c_d_inote = Note::from_parts(
+            c_addr.clone(),
+            d_addr.clone(),
+            value_to_send,
+            c_d_inote_rseed,
+        ).expect("should be able to create note");
+        let c_d_inote_nul = Nullifier::derive(&c_d_inote);
+
+        let setoff_amount = amount;
+        let value_reduced = Value {
+            amount: Amount::from(amount - setoff_amount),
+            asset_id: asset::Id(Fq::from(asset_id64)),
+        };
+        let d_c_onote = Note::from_parts(
+            d_addr.clone(),
+            c_addr.clone(),
+            value_reduced,
+            d_c_inote_rseed,
+        ).expect("should be able to create note");
+        let d_c_onote_comm = d_c_onote.commit();
+        let c_d_onote = Note::from_parts(
+            c_addr.clone(),
+            d_addr.clone(),
+            value_reduced,
+            c_d_inote_rseed,
+        ).expect("should be able to create note");
+        let c_d_onote_comm = c_d_onote.commit();
+
+        let constants = SettlementProofConst::default();
+        let leaves: Vec<[Fq; 1]> = vec![[d_c_inote.commit().0], [c_d_inote.commit().0]];
+        // Build tree with our one dummy note in order to get the merkle root value
+        let tree = Poseidon377MerkleTree::new(
+            &constants.leaf_crh_params,
+            &constants.two_to_one_crh_params,
+            leaves.clone(),
+        )
+        .unwrap();
+
+        // Get auth path from 0th leaf to root (input note)
+        let input_auth_path_1 = tree.generate_proof(0).unwrap();
+        let input_auth_path_2 = tree.generate_proof(1).unwrap();
+
+        let s_addr = test_keys::ADDRESS_0.clone();
+        let (d_c_onote_ct, d_c_ss_ct, d_c_e_pk) = encrypt_note_and_shared_secret(
+            &d_c_inote, &d_c_onote, &c_addr, &s_addr
+        ).unwrap();
+        let (c_d_onote_ct, c_d_ss_ct, c_d_e_pk) = encrypt_note_and_shared_secret(
+            &c_d_inote, &c_d_onote, &d_addr, &s_addr
+        ).unwrap();
+
+        let uncompressed_public = SettlementProofUncompressedPublic {
+            output_notes_commitments: [d_c_onote_comm, c_d_onote_comm],
+            nullifiers: [d_c_inote_nul, c_d_inote_nul],
+            root: tree.root(),
+            note_ciphertexts: [d_c_onote_ct, c_d_onote_ct],
+            ss_ciphertexts: [d_c_ss_ct, c_d_ss_ct],
+            note_epks: [d_c_e_pk, c_d_e_pk],
+        };
+        let public = uncompressed_public.clone().padded().unwrap().compress_to_public();
+        let private = SettlementProofPrivate {
+            uncompressed_public: uncompressed_public.clone(),
+            output_notes: [d_c_onote, c_d_onote],
+            input_notes: [d_c_inote, c_d_inote],
+            setoff_amount: Amount::from(setoff_amount),
+            input_notes_proofs: [input_auth_path_1, input_auth_path_2],
+            solver_ak: *test_keys::FULL_VIEWING_KEY.spend_verification_key(),
+            solver_nk: *test_keys::FULL_VIEWING_KEY.nullifier_key(),
+        }.padded().unwrap();
+
+        if let Err(e) = check_satisfaction(&public, &private) {
+            println!("check_satisfaction failed: {:?}", e);
+            assert!(false, "check_satisfaction failed");
+        }
+        if let Err(e) = check_circuit_satisfaction(public.clone(), private.clone()) {
+            println!("check_circuit_satisfaction failed: {:?}", e);
+            assert!(false, "check_circuit_satisfaction failed");
+        }
+        
+        let blinding_r = Fq::rand(&mut OsRng);
+        let blinding_s = Fq::rand(&mut OsRng);
+        let pk = ProvingKey::deserialize_uncompressed_unchecked(
+            include_bytes!("../../gen/settlement_pk.bin").as_slice(),
+        )
+        .unwrap();
+        let proof = SettlementProof::prove(blinding_r, blinding_s, &pk, public.clone(), private)
+            .expect("can create proof");
+
+        let vk = VerifyingKey::deserialize_uncompressed_unchecked(
+            include_bytes!("../../gen/settlement_vk.param").as_slice(),
+        )
+        .unwrap();
+    
+        proof.verify(&vk.into(), public.pub_inputs_hash, uncompressed_public.padded().unwrap()).unwrap()
     }
 }

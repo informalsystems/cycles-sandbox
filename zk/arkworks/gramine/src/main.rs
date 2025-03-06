@@ -60,8 +60,8 @@ fn main() {
     let target_dir = root.join("gen");
     println!("{}", target_dir.display());
 
-    let (output_pk, output_vk) = generate_parameters::<OutputCircuit>();
-    write_params(&target_dir, "output", &output_pk, &output_vk).expect("write failure");
+    // let (output_pk, output_vk) = generate_parameters::<OutputCircuit>();
+    // write_params(&target_dir, "output", &output_pk, &output_vk).expect("write failure");
 
     let (settlement_pk, settlement_vk) = generate_parameters::<SettlementCircuit>();
     write_params(&target_dir, "settlement", &settlement_pk, &settlement_vk).expect("write failure");
