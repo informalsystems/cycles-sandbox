@@ -34,12 +34,11 @@ use penumbra_shielded_pool::{note::StateCommitment, Rseed};
 use penumbra_tct::r1cs::StateCommitmentVar;
 use poseidon377::{RATE_1_PARAMS, RATE_2_PARAMS};
 use poseidon_parameters::v1::Matrix;
-use serde::{Deserialize, Serialize};
 
 use crate::canonical::CanonicalFqEncoding;
 use crate::encryption::r1cs::{CiphertextVar, PlaintextVar, PublicKeyVar, SharedSecretVar};
 use crate::encryption::{ecies_encrypt, r1cs, Ciphertext};
-use crate::note::{r1cs::enforce_equal_addresses, r1cs::NoteVar, Note};
+use crate::note::{r1cs::NoteVar, Note};
 use crate::nullifier::{Nullifier, NullifierVar};
 
 pub static NULLIFIER_DOMAIN_SEP: Lazy<Fq> = Lazy::new(|| {
@@ -1121,10 +1120,10 @@ impl<const N: usize> SettlementProofPrivate<N> {
 
 #[cfg(test)]
 mod tests {
-    use ark_crypto_primitives::crh::CRHScheme;
+    
     use ark_groth16::{ProvingKey, VerifyingKey};
     use ark_serialize::CanonicalDeserialize;
-    use arkworks_merkle_tree::poseidontree::{InnerDigest, LeafHash, Poseidon377MerkleTree};
+    use arkworks_merkle_tree::poseidontree::Poseidon377MerkleTree;
     use decaf377::{Encoding, Fq};
     use decaf377_ka::{Secret, SharedSecret};
     use penumbra_asset::{asset, Value};
