@@ -1,3 +1,4 @@
+use std::array::TryFromSliceError;
 use std::cmp::Ordering;
 
 use anyhow::Result;
@@ -33,6 +34,7 @@ use penumbra_shielded_pool::{note::StateCommitment, Rseed};
 use penumbra_tct::r1cs::StateCommitmentVar;
 use poseidon377::{RATE_1_PARAMS, RATE_2_PARAMS};
 use poseidon_parameters::v1::Matrix;
+use serde::{Deserialize, Serialize};
 
 use crate::canonical::CanonicalFqEncoding;
 use crate::encryption::r1cs::{CiphertextVar, PlaintextVar, PublicKeyVar, SharedSecretVar};
@@ -938,6 +940,53 @@ pub fn encrypt_note_and_shared_secret(
 #[derive(Clone, Debug)]
 pub struct SettlementProof([u8; GROTH16_PROOF_LENGTH_BYTES]);
 
+impl TryFrom<&[u8]> for SettlementProof {
+    type Error = TryFromSliceError;
+
+    fn try_from(byte_slice: &[u8]) -> Result<Self, Self::Error> {
+        Ok(Self(byte_slice[..].try_into()?))
+    }
+}
+
+impl<const N: usize> SettlementProofUncompressedPublic<N> {
+    pub fn new(
+        output_notes_commitments: Vec<StateCommitment>,
+        nullifiers: Vec<Nullifier>,
+        root: Root,
+        note_ciphertexts: Vec<Ciphertext>,
+        ss_ciphertexts: Vec<Ciphertext>,
+        note_epks: Vec<Public>,
+    ) -> Result<SettlementProofUncompressedPublic<MAX_PROOF_INPUT_ARRAY_SIZE>, anyhow::Error> {
+        // Check that all vectors have the same length
+        let len = output_notes_commitments.len();
+        if nullifiers.len() != len
+            || note_ciphertexts.len() != len
+            || ss_ciphertexts.len() != len
+            || note_epks.len() != len
+        {
+            return Err(anyhow::anyhow!("All input vectors must have the same length"));
+        }
+
+        // Check that length is less than or equal to MAX_PROOF_INPUT_ARRAY_SIZE
+        if len > MAX_PROOF_INPUT_ARRAY_SIZE {
+            return Err(anyhow::anyhow!(
+                "Input vectors cannot exceed MAX_PROOF_INPUT_ARRAY_SIZE ({})",
+                MAX_PROOF_INPUT_ARRAY_SIZE
+            ));
+        }
+
+        // Create the struct with padded vectors directly
+        Ok(SettlementProofUncompressedPublic {
+            output_notes_commitments: pad_to_fixed_size(&output_notes_commitments)?,
+            nullifiers: pad_to_fixed_size(&nullifiers)?,
+            root,
+            note_ciphertexts: pad_to_fixed_size(&note_ciphertexts)?,
+            ss_ciphertexts: pad_to_fixed_size(&ss_ciphertexts)?,
+            note_epks: pad_to_fixed_size(&note_epks)?,
+        })
+    }
+}
+
 impl SettlementProof {
     #![allow(clippy::too_many_arguments)]
     /// Generate an [`SettlementProof`] given the proving key, public inputs,
@@ -972,6 +1021,8 @@ impl SettlementProof {
         public_inputs_hash: Fq,
         public: SettlementProofUncompressedPublic<MAX_PROOF_INPUT_ARRAY_SIZE>,
     ) -> anyhow::Result<()> {
+        println!("\npublic verifier: {:?}", public);
+
         // Check that the proof's public input hash matches the hash of inputs
         if public_inputs_hash
             != calculate_pub_hash(
@@ -1421,7 +1472,7 @@ mod tests {
     }
 
     #[test]
-    fn test_verifier() {
+    fn test_verifier() -> anyhow::Result<()> {
         // Generate randomness for addresses and rseeds
         let seed_phrase_randomness_1 = [1u8; 32];
         let seed_phrase_randomness_2 = [2u8; 32];
@@ -1449,6 +1500,9 @@ mod tests {
             value_to_send,
             d_c_inote_rseed,
         ).expect("should be able to create note");
+
+        println!("note: {:?} commitment: {}, nullifier {:?}", d_c_inote, d_c_inote.commit(), Nullifier::derive(&d_c_inote));
+
         let d_c_inote_nul = Nullifier::derive(&d_c_inote);
 
         let c_d_inote = Note::from_parts(
@@ -1458,6 +1512,8 @@ mod tests {
             c_d_inote_rseed,
         ).expect("should be able to create note");
         let c_d_inote_nul = Nullifier::derive(&c_d_inote);
+
+        println!("note: {:?} commitment: {}, nullifier {:?}", c_d_inote, c_d_inote.commit(), Nullifier::derive(&c_d_inote));
 
         let setoff_amount = amount;
         let value_reduced = Value {
@@ -1471,6 +1527,8 @@ mod tests {
             d_c_inote_rseed,
         ).expect("should be able to create note");
         let d_c_onote_comm = d_c_onote.commit();
+        println!("o note: {:?} commitment: {}, nullifier {:?}", d_c_onote, d_c_onote_comm, Nullifier::derive(&d_c_onote));
+
         let c_d_onote = Note::from_parts(
             c_addr.clone(),
             d_addr.clone(),
@@ -1478,9 +1536,10 @@ mod tests {
             c_d_inote_rseed,
         ).expect("should be able to create note");
         let c_d_onote_comm = c_d_onote.commit();
+        println!("o note: {:?} commitment: {}, nullifier {:?}", c_d_onote, c_d_onote_comm, Nullifier::derive(&c_d_onote));
 
         let constants = SettlementProofConst::default();
-        let leaves: Vec<[Fq; 1]> = vec![[d_c_inote.commit().0], [c_d_inote.commit().0]];
+        let leaves: Vec<[Fq; 1]> = vec![[d_c_inote.commit().0], [c_d_inote.commit().0], [d_c_onote_comm.0], [c_d_onote_comm.0]];
         // Build tree with our one dummy note in order to get the merkle root value
         let tree = Poseidon377MerkleTree::new(
             &constants.leaf_crh_params,
@@ -1518,7 +1577,7 @@ mod tests {
             input_notes_proofs: [input_auth_path_1, input_auth_path_2],
             solver_ak: *test_keys::FULL_VIEWING_KEY.spend_verification_key(),
             solver_nk: *test_keys::FULL_VIEWING_KEY.nullifier_key(),
-        }.padded().unwrap();
+        }.padded()?;
 
         if let Err(e) = check_satisfaction(&public, &private) {
             println!("check_satisfaction failed: {:?}", e);
@@ -1533,16 +1592,25 @@ mod tests {
         let blinding_s = Fq::rand(&mut OsRng);
         let pk = ProvingKey::deserialize_uncompressed_unchecked(
             include_bytes!("../../gen/settlement_pk.bin").as_slice(),
-        )
-        .unwrap();
+        )?;
+
         let proof = SettlementProof::prove(blinding_r, blinding_s, &pk, public.clone(), private)
             .expect("can create proof");
 
         let vk = VerifyingKey::deserialize_uncompressed_unchecked(
             include_bytes!("../../gen/settlement_vk.param").as_slice(),
-        )
-        .unwrap();
+        )?;
     
-        proof.verify(&vk.into(), public.pub_inputs_hash, uncompressed_public.padded().unwrap()).unwrap()
+        proof.verify(&vk.into(), public.pub_inputs_hash, uncompressed_public.padded()?)
+    }
+
+
+    #[test]
+    fn test_verifier_multi() {
+        for i in 0..10 {
+            println!("attempt #: {}", i);
+            let res = test_verifier();
+            println!("result: {:?}", res);
+        }
     }
 }

@@ -5,3 +5,5 @@ pub use proof::{
     SettlementProofConst, SettlementProofPrivate, SettlementProofPublic,
     SettlementProofUncompressedPublic,
 };
+
+pub use penumbra_tct::StateCommitment;
