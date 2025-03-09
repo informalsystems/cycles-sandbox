@@ -56,8 +56,8 @@ pub struct OutputProofPrivate {
     pub e_sk: Secret,
 }
 
-#[cfg(test)]
-fn check_satisfaction(public: &OutputProofPublic, private: &OutputProofPrivate) -> Result<()> {
+// #[cfg(test)]
+pub fn check_satisfaction(public: &OutputProofPublic, private: &OutputProofPrivate) -> Result<()> {
     use penumbra_keys::FullViewingKey;
 
     if private.note.diversified_generator() == decaf377::Element::default() {
