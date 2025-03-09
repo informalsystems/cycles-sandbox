@@ -38,6 +38,7 @@ use poseidon_parameters::v1::Matrix;
 use crate::canonical::CanonicalFqEncoding;
 use crate::encryption::r1cs::{CiphertextVar, PlaintextVar, PublicKeyVar, SharedSecretVar};
 use crate::encryption::{ecies_encrypt, r1cs, Ciphertext};
+use crate::note::r1cs::enforce_equal_addresses;
 use crate::note::{r1cs::NoteVar, Note};
 use crate::nullifier::{Nullifier, NullifierVar};
 
@@ -728,22 +729,22 @@ impl ConstraintSynthesizer<Fq> for SettlementCircuit<MAX_PROOF_INPUT_ARRAY_SIZE>
             is_member.enforce_equal(&Boolean::TRUE)?;
         }
 
-        // for input_note_var in input_note_vars.windows(2).take(unpadded_len - 1)
-        // // stop before we get to pair where the second note is padded
-        // {
-        //     let curr_creditor = &input_note_var[0].creditor;
-        //     let next_debtor = &input_note_var[1].debtor;
-        //     enforce_equal_addresses(curr_creditor, next_debtor)?;
-        // }
-        // let first_debtor = input_note_vars
-        //     .first()
-        //     .map(|n| &n.debtor)
-        //     .ok_or(SynthesisError::Unsatisfiable)?;
-        // let last_creditor = input_note_vars
-        //     .get(unpadded_len - 1)
-        //     .map(|n| &n.creditor)
-        //     .ok_or(SynthesisError::Unsatisfiable)?;
-        // enforce_equal_addresses(first_debtor, last_creditor)?;
+        for input_note_var in input_note_vars.windows(2).take(unpadded_len - 1)
+        // stop before we get to pair where the second note is padded
+        {
+            let curr_creditor = &input_note_var[0].creditor;
+            let next_debtor = &input_note_var[1].debtor;
+            enforce_equal_addresses(curr_creditor, next_debtor)?;
+        }
+        let first_debtor = input_note_vars
+            .first()
+            .map(|n| &n.debtor)
+            .ok_or(SynthesisError::Unsatisfiable)?;
+        let last_creditor = input_note_vars
+            .get(unpadded_len - 1)
+            .map(|n| &n.creditor)
+            .ok_or(SynthesisError::Unsatisfiable)?;
+        enforce_equal_addresses(first_debtor, last_creditor)?;
 
         // // fixme: Do we need to check there are >1 input notes?
 
@@ -860,7 +861,8 @@ impl DummyWitness for SettlementCircuit<MAX_PROOF_INPUT_ARRAY_SIZE> {
         let c_d_onote_comm = c_d_onote.commit();
 
         let constants = SettlementProofConst::default();
-        let leaves: Vec<[Fq; 1]> = vec![[d_c_inote.commit().0], [c_d_inote.commit().0]];
+        let leaves: Vec<[Fq; 1]> = vec![[d_c_inote.commit().0], [c_d_inote.commit().0], [d_c_inote.commit().0], [c_d_inote.commit().0], [d_c_inote.commit().0], [c_d_inote.commit().0], [d_c_inote.commit().0], [c_d_inote.commit().0],
+            [d_c_inote.commit().0], [c_d_inote.commit().0], [d_c_inote.commit().0], [c_d_inote.commit().0], [d_c_inote.commit().0], [c_d_inote.commit().0], [d_c_inote.commit().0], [c_d_inote.commit().0]];
         // Build tree with our one dummy note in order to get the merkle root value
         let tree = Poseidon377MerkleTree::new(
             &constants.leaf_crh_params,
@@ -1538,7 +1540,9 @@ mod tests {
         println!("o note: {:?} commitment: {}, nullifier {:?}", c_d_onote, c_d_onote_comm, Nullifier::derive(&c_d_onote));
 
         let constants = SettlementProofConst::default();
-        let leaves: Vec<[Fq; 1]> = vec![[d_c_inote.commit().0], [c_d_inote.commit().0], [d_c_onote_comm.0], [c_d_onote_comm.0]];
+        let leaves: Vec<[Fq; 1]> = vec![[d_c_inote.commit().0], [c_d_inote.commit().0], [d_c_onote_comm.0], [c_d_onote_comm.0], [d_c_inote.commit().0], [c_d_inote.commit().0], [d_c_onote_comm.0], [c_d_onote_comm.0],
+        [d_c_inote.commit().0], [c_d_inote.commit().0], [d_c_onote_comm.0], [c_d_onote_comm.0], [d_c_inote.commit().0], [c_d_inote.commit().0], [d_c_onote_comm.0], [c_d_onote_comm.0]];
+        
         // Build tree with our one dummy note in order to get the merkle root value
         let tree = Poseidon377MerkleTree::new(
             &constants.leaf_crh_params,
