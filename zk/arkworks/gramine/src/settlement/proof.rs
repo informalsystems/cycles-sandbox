@@ -478,18 +478,15 @@ pub fn check_satisfaction(
 
     let mut expected_output_notes = vec![];
     for note in private.input_notes.iter().take(unpadded_len) {
-        // TODO: zero-valued input notes are not allowed right
-        if note.amount() != Amount::zero() {
-            let note = {
-                let remainder = note.amount() - private.setoff_amount;
-                let new_value = Value {
-                    amount: remainder,
-                    asset_id: note.asset_id(),
-                };
-                Note::from_parts(note.debtor(), note.creditor(), new_value, note.rseed())?
+        let note = {
+            let remainder = note.amount() - private.setoff_amount;
+            let new_value = Value {
+                amount: remainder,
+                asset_id: note.asset_id(),
             };
-            expected_output_notes.push(note.commit());
-        }
+            Note::from_parts(note.debtor(), note.creditor(), new_value, note.rseed())?
+        };
+        expected_output_notes.push(note.commit());
     }
     anyhow::ensure!(
         expected_output_notes
@@ -615,26 +612,18 @@ impl ConstraintSynthesizer<Fq> for SettlementCircuit<MAX_PROOF_INPUT_ARRAY_SIZE>
 
         let mut expected_output_note_commitment_vars = vec![];
         for note in &self.private.input_notes {
-            // TODO: zero-valued input notes are not allowed right
-            if note.amount() != Amount::zero() {
-                let note_var = {
-                    println!(
-                        "note amount:{} setoff: {}",
-                        note.amount(),
-                        self.private.setoff_amount
-                    );
-                    let remainder = note.amount() - self.private.setoff_amount;
-                    let new_value = Value {
-                        amount: remainder,
-                        asset_id: note.asset_id(),
-                    };
-                    let note =
-                        Note::from_parts(note.debtor(), note.creditor(), new_value, note.rseed())
-                            .map_err(|_| SynthesisError::Unsatisfiable)?;
-                    NoteVar::new_witness(cs.clone(), || Ok(note.clone()))?
+            let note_var = {
+                let remainder = note.amount() - self.private.setoff_amount;
+                let new_value = Value {
+                    amount: remainder,
+                    asset_id: note.asset_id(),
                 };
-                expected_output_note_commitment_vars.push(note_var.commit()?);
-            }
+                let note =
+                    Note::from_parts(note.debtor(), note.creditor(), new_value, note.rseed())
+                        .map_err(|_| SynthesisError::Unsatisfiable)?;
+                NoteVar::new_witness(cs.clone(), || Ok(note.clone()))?
+            };
+            expected_output_note_commitment_vars.push(note_var.commit()?);
         }
         let input_note_vars = self
             .private
