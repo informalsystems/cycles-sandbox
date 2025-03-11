@@ -1,3 +1,4 @@
+use std::array::TryFromSliceError;
 use std::cmp::Ordering;
 
 use anyhow::Result;
@@ -37,7 +38,8 @@ use poseidon_parameters::v1::Matrix;
 use crate::canonical::CanonicalFqEncoding;
 use crate::encryption::r1cs::{CiphertextVar, PlaintextVar, PublicKeyVar, SharedSecretVar};
 use crate::encryption::{ecies_encrypt, r1cs, Ciphertext};
-use crate::note::{r1cs::enforce_equal_addresses, r1cs::NoteVar, Note};
+use crate::note::r1cs::enforce_equal_addresses;
+use crate::note::{r1cs::NoteVar, Note};
 use crate::nullifier::{Nullifier, NullifierVar};
 
 pub static NULLIFIER_DOMAIN_SEP: Lazy<Fq> = Lazy::new(|| {
@@ -53,6 +55,10 @@ pub static SETTLEMENT_DOMAIN_SEP: Lazy<Fq> = Lazy::new(|| {
 });
 
 pub const MAX_PROOF_INPUT_ARRAY_SIZE: usize = 7;
+
+pub type MerkleProofPath = ark_crypto_primitives::merkle_tree::Path<
+    arkworks_merkle_tree::poseidontree::Poseidon377MerkleTreeParams,
+>;
 
 /// The public input for an [`SettlementProof`].
 #[derive(Clone, Debug)]
@@ -155,7 +161,7 @@ impl<const N_ROWS: usize, const N_COLS: usize, const N_ELEMENTS: usize> MatrixEx
     }
 }
 
-trait FixedSizePadding {
+pub trait FixedSizePadding {
     /// Produces a default/empty element for padding
     fn padding_default() -> Self;
 
@@ -282,7 +288,7 @@ impl FixedSizePadding for Public {
 
 /// Pads an input slice to an array of len `MAX_PROOF_INPUT_ARRAY_SIZE`.
 /// Truncates vectors longer than `MAX_PROOF_INPUT_ARRAY_SIZE`
-fn pad_to_fixed_size<F: FixedSizePadding>(
+pub fn pad_to_fixed_size<F: FixedSizePadding>(
     elements: &[F],
 ) -> anyhow::Result<[F; MAX_PROOF_INPUT_ARRAY_SIZE]> {
     anyhow::ensure!(
@@ -345,14 +351,14 @@ fn calculate_pub_hash_var(
     };
 
     let nullifiers_hash = {
-        let commitments_fq: [FqVar; MAX_PROOF_INPUT_ARRAY_SIZE] =
+        let nullifiers_fq: [FqVar; MAX_PROOF_INPUT_ARRAY_SIZE] =
             std::array::from_fn(|i| nullifier_vars[i].inner.clone());
 
         // Compute hashes
         poseidon377::r1cs::hash_7(
             cs.clone(),
             &nullifiers_var_domain_sep,
-            commitments_fq.into(),
+            nullifiers_fq.into(),
         )?
     };
 
@@ -363,8 +369,8 @@ fn calculate_pub_hash_var(
     )
 }
 
-#[cfg(test)]
-fn check_satisfaction(
+// #[cfg(test)]
+pub fn check_satisfaction(
     public: &SettlementProofPublic,
     private: &SettlementProofPrivate<MAX_PROOF_INPUT_ARRAY_SIZE>,
 ) -> Result<()> {
@@ -426,11 +432,17 @@ fn check_satisfaction(
         .take(unpadded_len)
         .zip(private.input_notes_proofs.iter())
     {
+        // Print the note commit and index for debugging
+        println!(
+            "Verifying merkle proof for note commitment: {:?} at leaf index: {}",
+            note.commit(),
+            auth_path.leaf_index
+        );
         let note_path_valid = auth_path.verify(
             &constants.leaf_crh_params,
             &constants.two_to_one_crh_params,
             &private.uncompressed_public.root,
-            [note.commit().0],
+            [note.commit().0; 1],
         );
         anyhow::ensure!(
             note_path_valid.is_ok(),
@@ -617,38 +629,38 @@ impl ConstraintSynthesizer<Fq> for SettlementCircuit<MAX_PROOF_INPUT_ARRAY_SIZE>
             .private
             .input_notes
             .map(|note| NoteVar::new_witness(cs.clone(), || Ok(note.clone())).unwrap());
-
-        // Public inputs
         let output_note_commitment_vars = self
             .private
             .uncompressed_public
             .output_notes_commitments
             .map(|commitment| {
-                StateCommitmentVar::new_input(cs.clone(), || Ok(commitment)).unwrap()
+                StateCommitmentVar::new_witness(cs.clone(), || Ok(commitment)).unwrap()
             });
         let nullifier_vars = self
             .private
             .uncompressed_public
             .nullifiers
-            .map(|nullifier| NullifierVar::new_input(cs.clone(), || Ok(nullifier)).unwrap());
+            .map(|nullifier| NullifierVar::new_witness(cs.clone(), || Ok(nullifier)).unwrap());
         let root_var =
-            RootVar::new_input(cs.clone(), || Ok(self.private.uncompressed_public.root))?;
-        let pub_inputs_hash_var = FqVar::new_input(cs.clone(), || Ok(self.public.pub_inputs_hash))?;
+            RootVar::new_witness(cs.clone(), || Ok(self.private.uncompressed_public.root))?;
         let note_ciphertext_vars = self
             .private
             .uncompressed_public
             .note_ciphertexts
-            .map(|ss_ct| CiphertextVar::new_input(cs.clone(), || Ok(ss_ct.clone())).unwrap());
+            .map(|note_ct| CiphertextVar::new_witness(cs.clone(), || Ok(note_ct.clone())).unwrap());
         let ss_ciphertext_vars = self
             .private
             .uncompressed_public
             .ss_ciphertexts
-            .map(|ss_ct| CiphertextVar::new_input(cs.clone(), || Ok(ss_ct.clone())).unwrap());
+            .map(|ss_ct| CiphertextVar::new_witness(cs.clone(), || Ok(ss_ct.clone())).unwrap());
         let note_epk_vars = self
             .private
             .uncompressed_public
             .note_epks
-            .map(|epk| PublicKeyVar::new_input(cs.clone(), || Ok(epk)).unwrap());
+            .map(|epk| PublicKeyVar::new_witness(cs.clone(), || Ok(epk)).unwrap());
+
+        // Public inputs
+        let pub_inputs_hash_var = FqVar::new_input(cs.clone(), || Ok(self.public.pub_inputs_hash))?;
 
         // Constants
         let constants = SettlementProofConst::default();
@@ -702,6 +714,7 @@ impl ConstraintSynthesizer<Fq> for SettlementCircuit<MAX_PROOF_INPUT_ARRAY_SIZE>
                 &root_var,
                 &[input_note_var.commit()?.inner],
             )?;
+
             is_member.enforce_equal(&Boolean::TRUE)?;
         }
 
@@ -722,7 +735,7 @@ impl ConstraintSynthesizer<Fq> for SettlementCircuit<MAX_PROOF_INPUT_ARRAY_SIZE>
             .ok_or(SynthesisError::Unsatisfiable)?;
         enforce_equal_addresses(first_debtor, last_creditor)?;
 
-        // fixme: Do we need to check there are >1 input notes?
+        // // fixme: Do we need to check there are >1 input notes?
 
         // setoff_amount > 0
         setoff_var
@@ -837,7 +850,8 @@ impl DummyWitness for SettlementCircuit<MAX_PROOF_INPUT_ARRAY_SIZE> {
         let c_d_onote_comm = c_d_onote.commit();
 
         let constants = SettlementProofConst::default();
-        let leaves: Vec<[Fq; 1]> = vec![[d_c_inote.commit().0], [c_d_inote.commit().0]];
+        let leaves: Vec<[Fq; 1]> = vec![[d_c_inote.commit().0], [c_d_inote.commit().0], [d_c_inote.commit().0], [c_d_inote.commit().0], [d_c_inote.commit().0], [c_d_inote.commit().0], [d_c_inote.commit().0], [c_d_inote.commit().0],
+            [d_c_inote.commit().0], [c_d_inote.commit().0], [d_c_inote.commit().0], [c_d_inote.commit().0], [d_c_inote.commit().0], [c_d_inote.commit().0], [d_c_inote.commit().0], [c_d_inote.commit().0]];
         // Build tree with our one dummy note in order to get the merkle root value
         let tree = Poseidon377MerkleTree::new(
             &constants.leaf_crh_params,
@@ -908,13 +922,60 @@ pub fn encrypt_note_and_shared_secret(
     let d_s_ss_enc = Encoding(d_s_ss.0)
         .vartime_decompress()
         .map_err(|e| anyhow::anyhow!(e))?;
-    let d_c_ss_ct = ecies_encrypt(d_s_ss_enc, vec![d_c_ss_enc.vartime_compress_to_field()])?;
+    let d_c_ss_ct = ecies_encrypt(d_s_ss_enc, vec![Fq::from_le_bytes_mod_order(&d_c_ss.0)])?;
 
     Ok((onote_ct, d_c_ss_ct, e_pk))
 }
 
 #[derive(Clone, Debug)]
 pub struct SettlementProof([u8; GROTH16_PROOF_LENGTH_BYTES]);
+
+impl TryFrom<&[u8]> for SettlementProof {
+    type Error = TryFromSliceError;
+
+    fn try_from(byte_slice: &[u8]) -> Result<Self, Self::Error> {
+        Ok(Self(byte_slice[..].try_into()?))
+    }
+}
+
+impl<const N: usize> SettlementProofUncompressedPublic<N> {
+    pub fn new(
+        output_notes_commitments: Vec<StateCommitment>,
+        nullifiers: Vec<Nullifier>,
+        root: Root,
+        note_ciphertexts: Vec<Ciphertext>,
+        ss_ciphertexts: Vec<Ciphertext>,
+        note_epks: Vec<Public>,
+    ) -> Result<SettlementProofUncompressedPublic<MAX_PROOF_INPUT_ARRAY_SIZE>, anyhow::Error> {
+        // Check that all vectors have the same length
+        let len = output_notes_commitments.len();
+        if nullifiers.len() != len
+            || note_ciphertexts.len() != len
+            || ss_ciphertexts.len() != len
+            || note_epks.len() != len
+        {
+            return Err(anyhow::anyhow!("All input vectors must have the same length"));
+        }
+
+        // Check that length is less than or equal to MAX_PROOF_INPUT_ARRAY_SIZE
+        if len > MAX_PROOF_INPUT_ARRAY_SIZE {
+            return Err(anyhow::anyhow!(
+                "Input vectors cannot exceed MAX_PROOF_INPUT_ARRAY_SIZE ({})",
+                MAX_PROOF_INPUT_ARRAY_SIZE
+            ));
+        }
+
+        // Create the struct with padded vectors directly
+        Ok(SettlementProofUncompressedPublic {
+            output_notes_commitments: pad_to_fixed_size(&output_notes_commitments)?,
+            nullifiers: pad_to_fixed_size(&nullifiers)?,
+            root,
+            note_ciphertexts: pad_to_fixed_size(&note_ciphertexts)?,
+            ss_ciphertexts: pad_to_fixed_size(&ss_ciphertexts)?,
+            note_epks: pad_to_fixed_size(&note_epks)?,
+        })
+    }
+}
 
 impl SettlementProof {
     #![allow(clippy::too_many_arguments)]
@@ -950,6 +1011,8 @@ impl SettlementProof {
         public_inputs_hash: Fq,
         public: SettlementProofUncompressedPublic<MAX_PROOF_INPUT_ARRAY_SIZE>,
     ) -> anyhow::Result<()> {
+        println!("\npublic verifier: {:?}", public);
+
         // Check that the proof's public input hash matches the hash of inputs
         if public_inputs_hash
             != calculate_pub_hash(
@@ -1048,6 +1111,9 @@ impl<const N: usize> SettlementProofPrivate<N> {
 
 #[cfg(test)]
 mod tests {
+    
+    use ark_groth16::{ProvingKey, VerifyingKey};
+    use ark_serialize::CanonicalDeserialize;
     use arkworks_merkle_tree::poseidontree::Poseidon377MerkleTree;
     use decaf377::{Encoding, Fq};
     use decaf377_ka::{Secret, SharedSecret};
@@ -1069,6 +1135,8 @@ mod tests {
     use crate::settlement::{
         proof::MAX_PROOF_INPUT_ARRAY_SIZE, SettlementProofPrivate, SettlementProofPublic,
     };
+
+    use super::SettlementProof;
 
     fn fq_strategy() -> BoxedStrategy<Fq> {
         any::<[u8; 32]>()
@@ -1391,5 +1459,150 @@ mod tests {
         let s_ivk = test_keys::FULL_VIEWING_KEY.incoming();
         let s_d_ss = s_ivk.key_agreement_with(&e_pk).unwrap();
         assert_eq!(s_d_ss, d_s_ss);
+    }
+
+    #[test]
+    fn test_verifier() -> anyhow::Result<()> {
+        // Generate randomness for addresses and rseeds
+        let seed_phrase_randomness_1 = [1u8; 32];
+        let seed_phrase_randomness_2 = [2u8; 32];
+        let address_index_1 = 1u32;
+        let address_index_2 = 2u32;
+        let rseed_randomness_1 = [3u8; 32];
+        let rseed_randomness_2 = [4u8; 32];
+        
+        let d_addr = address_from_seed(&seed_phrase_randomness_1, address_index_1);
+        let c_addr = address_from_seed(&seed_phrase_randomness_2, address_index_2);
+        let d_c_inote_rseed = Rseed(rseed_randomness_1);
+        let c_d_inote_rseed = Rseed(rseed_randomness_2);
+
+        // Set up test values
+        let amount = 10u64;
+        let asset_id64 = 1u64;
+
+        let value_to_send = Value {
+            amount: Amount::from(amount),
+            asset_id: asset::Id(Fq::from(asset_id64)),
+        };
+        let d_c_inote = Note::from_parts(
+            d_addr.clone(),
+            c_addr.clone(),
+            value_to_send,
+            d_c_inote_rseed,
+        ).expect("should be able to create note");
+
+        println!("note: {:?} commitment: {}, nullifier {:?}", d_c_inote, d_c_inote.commit(), Nullifier::derive(&d_c_inote));
+
+        let d_c_inote_nul = Nullifier::derive(&d_c_inote);
+
+        let c_d_inote = Note::from_parts(
+            c_addr.clone(),
+            d_addr.clone(),
+            value_to_send,
+            c_d_inote_rseed,
+        ).expect("should be able to create note");
+        let c_d_inote_nul = Nullifier::derive(&c_d_inote);
+
+        println!("note: {:?} commitment: {}, nullifier {:?}", c_d_inote, c_d_inote.commit(), Nullifier::derive(&c_d_inote));
+
+        let setoff_amount = amount;
+        let value_reduced = Value {
+            amount: Amount::from(amount - setoff_amount),
+            asset_id: asset::Id(Fq::from(asset_id64)),
+        };
+        let d_c_onote = Note::from_parts(
+            d_addr.clone(),
+            c_addr.clone(),
+            value_reduced,
+            d_c_inote_rseed,
+        ).expect("should be able to create note");
+        let d_c_onote_comm = d_c_onote.commit();
+        println!("o note: {:?} commitment: {}, nullifier {:?}", d_c_onote, d_c_onote_comm, Nullifier::derive(&d_c_onote));
+
+        let c_d_onote = Note::from_parts(
+            c_addr.clone(),
+            d_addr.clone(),
+            value_reduced,
+            c_d_inote_rseed,
+        ).expect("should be able to create note");
+        let c_d_onote_comm = c_d_onote.commit();
+        println!("o note: {:?} commitment: {}, nullifier {:?}", c_d_onote, c_d_onote_comm, Nullifier::derive(&c_d_onote));
+
+        let constants = SettlementProofConst::default();
+        let leaves: Vec<[Fq; 1]> = vec![[d_c_inote.commit().0], [c_d_inote.commit().0], [d_c_onote_comm.0], [c_d_onote_comm.0], [d_c_inote.commit().0], [c_d_inote.commit().0], [d_c_onote_comm.0], [c_d_onote_comm.0],
+        [d_c_inote.commit().0], [c_d_inote.commit().0], [d_c_onote_comm.0], [c_d_onote_comm.0], [d_c_inote.commit().0], [c_d_inote.commit().0], [d_c_onote_comm.0], [c_d_onote_comm.0]];
+        
+        // Build tree with our one dummy note in order to get the merkle root value
+        let tree = Poseidon377MerkleTree::new(
+            &constants.leaf_crh_params,
+            &constants.two_to_one_crh_params,
+            leaves.clone(),
+        )
+        .unwrap();
+
+        // Get auth path from 0th leaf to root (input note)
+        let input_auth_path_1 = tree.generate_proof(0).unwrap();
+        let input_auth_path_2 = tree.generate_proof(1).unwrap();
+
+        let s_addr = test_keys::ADDRESS_0.clone();
+        let (d_c_onote_ct, d_c_ss_ct, d_c_e_pk) = encrypt_note_and_shared_secret(
+            &d_c_inote, &d_c_onote, &c_addr, &s_addr
+        ).unwrap();
+        let (c_d_onote_ct, c_d_ss_ct, c_d_e_pk) = encrypt_note_and_shared_secret(
+            &c_d_inote, &c_d_onote, &d_addr, &s_addr
+        ).unwrap();
+
+        let uncompressed_public = SettlementProofUncompressedPublic {
+            output_notes_commitments: [d_c_onote_comm, c_d_onote_comm],
+            nullifiers: [d_c_inote_nul, c_d_inote_nul],
+            root: tree.root(),
+            note_ciphertexts: [d_c_onote_ct, c_d_onote_ct],
+            ss_ciphertexts: [d_c_ss_ct, c_d_ss_ct],
+            note_epks: [d_c_e_pk, c_d_e_pk],
+        };
+        let public = uncompressed_public.clone().padded().unwrap().compress_to_public();
+        let private = SettlementProofPrivate {
+            uncompressed_public: uncompressed_public.clone(),
+            output_notes: [d_c_onote, c_d_onote],
+            input_notes: [d_c_inote, c_d_inote],
+            setoff_amount: Amount::from(setoff_amount),
+            input_notes_proofs: [input_auth_path_1, input_auth_path_2],
+            solver_ak: *test_keys::FULL_VIEWING_KEY.spend_verification_key(),
+            solver_nk: *test_keys::FULL_VIEWING_KEY.nullifier_key(),
+        }.padded()?;
+
+        if let Err(e) = check_satisfaction(&public, &private) {
+            println!("check_satisfaction failed: {:?}", e);
+            assert!(false, "check_satisfaction failed");
+        }
+        if let Err(e) = check_circuit_satisfaction(public.clone(), private.clone()) {
+            println!("check_circuit_satisfaction failed: {:?}", e);
+            assert!(false, "check_circuit_satisfaction failed");
+        }
+        
+        let blinding_r = Fq::rand(&mut OsRng);
+        let blinding_s = Fq::rand(&mut OsRng);
+        let pk = ProvingKey::deserialize_uncompressed_unchecked(
+            include_bytes!("../../gen/settlement_pk.bin").as_slice(),
+        )?;
+
+        let proof = SettlementProof::prove(blinding_r, blinding_s, &pk, public.clone(), private)
+            .expect("can create proof");
+
+        let vk = VerifyingKey::deserialize_uncompressed_unchecked(
+            include_bytes!("../../gen/settlement_vk.param").as_slice(),
+        )?;
+    
+        proof.verify(&vk.into(), public.pub_inputs_hash, uncompressed_public.padded()?)
+    }
+
+
+    #[test]
+    fn test_verifier_multi() {
+        for i in 0..10 {
+            println!("attempt #: {}", i);
+            let res = test_verifier();
+            println!("result: {:?}", res);
+        }
     }
 }

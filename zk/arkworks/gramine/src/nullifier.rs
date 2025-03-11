@@ -114,7 +114,9 @@ impl AllocVar<Nullifier, Fq> for NullifierVar {
             AllocationMode::Input => Ok(Self {
                 inner: FqVar::new_input(cs, || Ok(inner.0))?,
             }),
-            AllocationMode::Witness => unimplemented!(),
+            AllocationMode::Witness => Ok(Self {
+                inner: FqVar::new_witness(cs, || Ok(inner.0))?,
+            }),
         }
     }
 }

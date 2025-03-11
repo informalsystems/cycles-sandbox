@@ -1,6 +1,9 @@
 mod proof;
 
 pub use proof::{
-    SettlementCircuit, SettlementProof, SettlementProofConst, SettlementProofPrivate,
-    SettlementProofPublic, SettlementProofUncompressedPublic,
+    check_satisfaction, pad_to_fixed_size, MerkleProofPath, SettlementCircuit, SettlementProof,
+    SettlementProofConst, SettlementProofPrivate, SettlementProofPublic,
+    SettlementProofUncompressedPublic,
 };
+
+pub use penumbra_tct::StateCommitment;
