@@ -355,11 +355,7 @@ fn calculate_pub_hash_var(
             std::array::from_fn(|i| nullifier_vars[i].inner.clone());
 
         // Compute hashes
-        poseidon377::r1cs::hash_7(
-            cs.clone(),
-            &nullifiers_var_domain_sep,
-            nullifiers_fq.into(),
-        )?
+        poseidon377::r1cs::hash_7(cs.clone(), &nullifiers_var_domain_sep, nullifiers_fq.into())?
     };
 
     poseidon377::r1cs::hash_3(
@@ -611,7 +607,7 @@ impl ConstraintSynthesizer<Fq> for SettlementCircuit<MAX_PROOF_INPUT_ARRAY_SIZE>
         };
 
         let mut expected_output_note_commitment_vars = vec![];
-        for note in &self.private.input_notes {
+        for note in self.private.input_notes.iter().take(unpadded_len) {
             let note_var = {
                 let remainder = note.amount() - self.private.setoff_amount;
                 let new_value = Value {
@@ -850,8 +846,24 @@ impl DummyWitness for SettlementCircuit<MAX_PROOF_INPUT_ARRAY_SIZE> {
         let c_d_onote_comm = c_d_onote.commit();
 
         let constants = SettlementProofConst::default();
-        let leaves: Vec<[Fq; 1]> = vec![[d_c_inote.commit().0], [c_d_inote.commit().0], [d_c_inote.commit().0], [c_d_inote.commit().0], [d_c_inote.commit().0], [c_d_inote.commit().0], [d_c_inote.commit().0], [c_d_inote.commit().0],
-            [d_c_inote.commit().0], [c_d_inote.commit().0], [d_c_inote.commit().0], [c_d_inote.commit().0], [d_c_inote.commit().0], [c_d_inote.commit().0], [d_c_inote.commit().0], [c_d_inote.commit().0]];
+        let leaves: Vec<[Fq; 1]> = vec![
+            [d_c_inote.commit().0],
+            [c_d_inote.commit().0],
+            [d_c_inote.commit().0],
+            [c_d_inote.commit().0],
+            [d_c_inote.commit().0],
+            [c_d_inote.commit().0],
+            [d_c_inote.commit().0],
+            [c_d_inote.commit().0],
+            [d_c_inote.commit().0],
+            [c_d_inote.commit().0],
+            [d_c_inote.commit().0],
+            [c_d_inote.commit().0],
+            [d_c_inote.commit().0],
+            [c_d_inote.commit().0],
+            [d_c_inote.commit().0],
+            [c_d_inote.commit().0],
+        ];
         // Build tree with our one dummy note in order to get the merkle root value
         let tree = Poseidon377MerkleTree::new(
             &constants.leaf_crh_params,
@@ -954,7 +966,9 @@ impl<const N: usize> SettlementProofUncompressedPublic<N> {
             || ss_ciphertexts.len() != len
             || note_epks.len() != len
         {
-            return Err(anyhow::anyhow!("All input vectors must have the same length"));
+            return Err(anyhow::anyhow!(
+                "All input vectors must have the same length"
+            ));
         }
 
         // Check that length is less than or equal to MAX_PROOF_INPUT_ARRAY_SIZE
@@ -1111,7 +1125,7 @@ impl<const N: usize> SettlementProofPrivate<N> {
 
 #[cfg(test)]
 mod tests {
-    
+
     use ark_groth16::{ProvingKey, VerifyingKey};
     use ark_serialize::CanonicalDeserialize;
     use arkworks_merkle_tree::poseidontree::Poseidon377MerkleTree;
@@ -1470,7 +1484,7 @@ mod tests {
         let address_index_2 = 2u32;
         let rseed_randomness_1 = [3u8; 32];
         let rseed_randomness_2 = [4u8; 32];
-        
+
         let d_addr = address_from_seed(&seed_phrase_randomness_1, address_index_1);
         let c_addr = address_from_seed(&seed_phrase_randomness_2, address_index_2);
         let d_c_inote_rseed = Rseed(rseed_randomness_1);
@@ -1489,9 +1503,15 @@ mod tests {
             c_addr.clone(),
             value_to_send,
             d_c_inote_rseed,
-        ).expect("should be able to create note");
+        )
+        .expect("should be able to create note");
 
-        println!("note: {:?} commitment: {}, nullifier {:?}", d_c_inote, d_c_inote.commit(), Nullifier::derive(&d_c_inote));
+        println!(
+            "note: {:?} commitment: {}, nullifier {:?}",
+            d_c_inote,
+            d_c_inote.commit(),
+            Nullifier::derive(&d_c_inote)
+        );
 
         let d_c_inote_nul = Nullifier::derive(&d_c_inote);
 
@@ -1500,10 +1520,16 @@ mod tests {
             d_addr.clone(),
             value_to_send,
             c_d_inote_rseed,
-        ).expect("should be able to create note");
+        )
+        .expect("should be able to create note");
         let c_d_inote_nul = Nullifier::derive(&c_d_inote);
 
-        println!("note: {:?} commitment: {}, nullifier {:?}", c_d_inote, c_d_inote.commit(), Nullifier::derive(&c_d_inote));
+        println!(
+            "note: {:?} commitment: {}, nullifier {:?}",
+            c_d_inote,
+            c_d_inote.commit(),
+            Nullifier::derive(&c_d_inote)
+        );
 
         let setoff_amount = amount;
         let value_reduced = Value {
@@ -1515,23 +1541,51 @@ mod tests {
             c_addr.clone(),
             value_reduced,
             d_c_inote_rseed,
-        ).expect("should be able to create note");
+        )
+        .expect("should be able to create note");
         let d_c_onote_comm = d_c_onote.commit();
-        println!("o note: {:?} commitment: {}, nullifier {:?}", d_c_onote, d_c_onote_comm, Nullifier::derive(&d_c_onote));
+        println!(
+            "o note: {:?} commitment: {}, nullifier {:?}",
+            d_c_onote,
+            d_c_onote_comm,
+            Nullifier::derive(&d_c_onote)
+        );
 
         let c_d_onote = Note::from_parts(
             c_addr.clone(),
             d_addr.clone(),
             value_reduced,
             c_d_inote_rseed,
-        ).expect("should be able to create note");
+        )
+        .expect("should be able to create note");
         let c_d_onote_comm = c_d_onote.commit();
-        println!("o note: {:?} commitment: {}, nullifier {:?}", c_d_onote, c_d_onote_comm, Nullifier::derive(&c_d_onote));
+        println!(
+            "o note: {:?} commitment: {}, nullifier {:?}",
+            c_d_onote,
+            c_d_onote_comm,
+            Nullifier::derive(&c_d_onote)
+        );
 
         let constants = SettlementProofConst::default();
-        let leaves: Vec<[Fq; 1]> = vec![[d_c_inote.commit().0], [c_d_inote.commit().0], [d_c_onote_comm.0], [c_d_onote_comm.0], [d_c_inote.commit().0], [c_d_inote.commit().0], [d_c_onote_comm.0], [c_d_onote_comm.0],
-        [d_c_inote.commit().0], [c_d_inote.commit().0], [d_c_onote_comm.0], [c_d_onote_comm.0], [d_c_inote.commit().0], [c_d_inote.commit().0], [d_c_onote_comm.0], [c_d_onote_comm.0]];
-        
+        let leaves: Vec<[Fq; 1]> = vec![
+            [d_c_inote.commit().0],
+            [c_d_inote.commit().0],
+            [d_c_onote_comm.0],
+            [c_d_onote_comm.0],
+            [d_c_inote.commit().0],
+            [c_d_inote.commit().0],
+            [d_c_onote_comm.0],
+            [c_d_onote_comm.0],
+            [d_c_inote.commit().0],
+            [c_d_inote.commit().0],
+            [d_c_onote_comm.0],
+            [c_d_onote_comm.0],
+            [d_c_inote.commit().0],
+            [c_d_inote.commit().0],
+            [d_c_onote_comm.0],
+            [c_d_onote_comm.0],
+        ];
+
         // Build tree with our one dummy note in order to get the merkle root value
         let tree = Poseidon377MerkleTree::new(
             &constants.leaf_crh_params,
@@ -1545,12 +1599,10 @@ mod tests {
         let input_auth_path_2 = tree.generate_proof(1).unwrap();
 
         let s_addr = test_keys::ADDRESS_0.clone();
-        let (d_c_onote_ct, d_c_ss_ct, d_c_e_pk) = encrypt_note_and_shared_secret(
-            &d_c_inote, &d_c_onote, &c_addr, &s_addr
-        ).unwrap();
-        let (c_d_onote_ct, c_d_ss_ct, c_d_e_pk) = encrypt_note_and_shared_secret(
-            &c_d_inote, &c_d_onote, &d_addr, &s_addr
-        ).unwrap();
+        let (d_c_onote_ct, d_c_ss_ct, d_c_e_pk) =
+            encrypt_note_and_shared_secret(&d_c_inote, &d_c_onote, &c_addr, &s_addr).unwrap();
+        let (c_d_onote_ct, c_d_ss_ct, c_d_e_pk) =
+            encrypt_note_and_shared_secret(&c_d_inote, &c_d_onote, &d_addr, &s_addr).unwrap();
 
         let uncompressed_public = SettlementProofUncompressedPublic {
             output_notes_commitments: [d_c_onote_comm, c_d_onote_comm],
@@ -1560,7 +1612,11 @@ mod tests {
             ss_ciphertexts: [d_c_ss_ct, c_d_ss_ct],
             note_epks: [d_c_e_pk, c_d_e_pk],
         };
-        let public = uncompressed_public.clone().padded().unwrap().compress_to_public();
+        let public = uncompressed_public
+            .clone()
+            .padded()
+            .unwrap()
+            .compress_to_public();
         let private = SettlementProofPrivate {
             uncompressed_public: uncompressed_public.clone(),
             output_notes: [d_c_onote, c_d_onote],
@@ -1569,7 +1625,8 @@ mod tests {
             input_notes_proofs: [input_auth_path_1, input_auth_path_2],
             solver_ak: *test_keys::FULL_VIEWING_KEY.spend_verification_key(),
             solver_nk: *test_keys::FULL_VIEWING_KEY.nullifier_key(),
-        }.padded()?;
+        }
+        .padded()?;
 
         if let Err(e) = check_satisfaction(&public, &private) {
             println!("check_satisfaction failed: {:?}", e);
@@ -1579,7 +1636,7 @@ mod tests {
             println!("check_circuit_satisfaction failed: {:?}", e);
             assert!(false, "check_circuit_satisfaction failed");
         }
-        
+
         let blinding_r = Fq::rand(&mut OsRng);
         let blinding_s = Fq::rand(&mut OsRng);
         let pk = ProvingKey::deserialize_uncompressed_unchecked(
@@ -1592,10 +1649,13 @@ mod tests {
         let vk = VerifyingKey::deserialize_uncompressed_unchecked(
             include_bytes!("../../gen/settlement_vk.param").as_slice(),
         )?;
-    
-        proof.verify(&vk.into(), public.pub_inputs_hash, uncompressed_public.padded()?)
-    }
 
+        proof.verify(
+            &vk.into(),
+            public.pub_inputs_hash,
+            uncompressed_public.padded()?,
+        )
+    }
 
     #[test]
     fn test_verifier_multi() {
