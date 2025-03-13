@@ -1,4 +1,5 @@
 use std::fmt;
+use std::str::FromStr;
 
 use decaf377::Fq;
 use decaf377_fmd as fmd;
@@ -161,15 +162,27 @@ impl Serialize for Note {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
-    {
-        // Use a map to serialize fields
-        let mut state = serializer.serialize_struct("Note", 4)?;
-        state.serialize_field("value", &self.value)?;
-        state.serialize_field("rseed", &self.rseed.to_bytes())?;
-        state.serialize_field("debtor", &self.debtor.to_string())?;
-        state.serialize_field("creditor", &self.creditor.to_string())?;
-        state.end()
-    }
+        {
+            // Use a map to serialize fields
+            let mut state = serializer.serialize_struct("Note", 4)?;
+            
+            #[derive(Serialize)]
+            struct ValueObject {
+                amount: u128,
+                asset_id: String,
+            }
+            
+            let value_obj = ValueObject {
+                amount: self.value.amount.value(),
+                asset_id: self.value.asset_id.to_string(), // This uses the Display impl which formats as bech32m
+            };
+            
+            state.serialize_field("value", &value_obj)?;
+            state.serialize_field("rseed", &self.rseed.to_bytes())?;
+            state.serialize_field("debtor", &self.debtor.to_string())?;
+            state.serialize_field("creditor", &self.creditor.to_string())?;
+            state.end()
+        }
 }
 
 impl<'de> Deserialize<'de> for Note {
@@ -210,7 +223,22 @@ impl<'de> Deserialize<'de> for Note {
                             if value.is_some() {
                                 return Err(de::Error::duplicate_field("value"));
                             }
-                            value = Some(map.next_value()?);
+                            // Deserialize value from a nested object with amount as a number and asset_id as a bech32m string
+                            #[derive(Deserialize)]
+                            struct ValueObject {
+                                amount: u128,
+                                asset_id: String,
+                            }
+                            
+                            let value_obj: ValueObject = map.next_value()?;
+                            
+                            let asset_id = asset::Id::from_str(&value_obj.asset_id)
+                                .map_err(|e| de::Error::custom(format!("Failed to parse asset_id: {}", e)))?;
+                            
+                            value = Some(Value {
+                                amount: value_obj.amount.into(),
+                                asset_id,
+                            });
                         }
                         Field::Rseed => {
                             if rseed.is_some() {
