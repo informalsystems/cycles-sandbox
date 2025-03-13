@@ -166,8 +166,8 @@ impl Serialize for Note {
         let mut state = serializer.serialize_struct("Note", 4)?;
         state.serialize_field("value", &self.value)?;
         state.serialize_field("rseed", &self.rseed.to_bytes())?;
-        state.serialize_field("debtor", &self.debtor)?;
-        state.serialize_field("creditor", &self.creditor)?;
+        state.serialize_field("debtor", &self.debtor.to_string())?;
+        state.serialize_field("creditor", &self.creditor.to_string())?;
         state.end()
     }
 }
@@ -222,13 +222,29 @@ impl<'de> Deserialize<'de> for Note {
                             if debtor.is_some() {
                                 return Err(de::Error::duplicate_field("debtor"));
                             }
-                            debtor = Some(map.next_value()?);
+                            // Try to parse as string first, fall back to deserializing as Address
+                            debtor = match map.next_value::<serde_json::Value>()? {
+                                serde_json::Value::String(s) => {
+                                    Some(s.parse().map_err(de::Error::custom)?)
+                                }
+                                other => {
+                                    Some(serde_json::from_value(other).map_err(de::Error::custom)?)
+                                }
+                            };
                         }
                         Field::Creditor => {
                             if creditor.is_some() {
                                 return Err(de::Error::duplicate_field("creditor"));
                             }
-                            creditor = Some(map.next_value()?);
+                            // Try to parse as string first, fall back to deserializing as Address
+                            creditor = match map.next_value::<serde_json::Value>()? {
+                                serde_json::Value::String(s) => {
+                                    Some(s.parse().map_err(de::Error::custom)?)
+                                }
+                                other => {
+                                    Some(serde_json::from_value(other).map_err(de::Error::custom)?)
+                                }
+                            };
                         }
                     }
                 }

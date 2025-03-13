@@ -60,11 +60,11 @@ poseidon-parameters              = { git = "https://github.com/dangush/poseidon3
 rand                             = { version = "0.8.5" }
 rand_core                        = { version = "0.6.4", default-features = false }
 serde                            = { version = "1.0.216", features = ["derive"], default-features = false }
+serde_json                       = { version = "1.0.135", default-features = false }
 tracing                          = { version = "0.1.41", default-features = false }
 
 [dev-dependencies]
 proptest                         = { version = "1" }
-serde_json                       = { version = "1.0.135" }
 
 [patch.crates-io]
 decaf377                         = { git = "https://github.com/hu55a1n1/decaf377.git" }
